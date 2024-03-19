@@ -1,3 +1,5 @@
+# pip install --upgrade psycopg2-binary pandas numpy scipy requests boto3 s3fs fsspec
+
 # import required libraries
 import psycopg2
 import pandas as pd
@@ -13,9 +15,6 @@ import csv
 import boto3
 
 # --------------- HELPER FUNCTIONS ---------------
-# - specific to the rfamily run
-# - modified to work with double quote wrapping for csv files
-
 def family_biosamples_mapper(row):
     if row['bio_sample'] in family_biosamples_n_reads:
         family_biosamples_n_reads[row['bio_sample']].append(row['n_reads'])
@@ -29,7 +28,7 @@ def family_biosamples_mapper(row):
     
 def family_bioproject_mapper(row):
     try:
-        return srarun_bioprojects_map[row['bio_sample'][1:-1]]
+        return srarun_bioprojects_map[row['bio_sample']]
     except:
         return np.nan
 
@@ -39,10 +38,10 @@ def get_n_reads(row):
     #   - if run in serratus but no n_reads, then set to 0 (from srarun_biosamples_map)
     #   - if not run in serratus, then set to np.nan
     try:
-        return family_biosamples_n_reads[row['biosample_id'][1:-1]]
+        return family_biosamples_n_reads[row['biosample_id']]
     except:
         try:
-            return srarun_biosamples_map[row['biosample_id'][1:-1]]
+            return srarun_biosamples_map[row['biosample_id']]
         except:
             return np.nan
 
@@ -50,7 +49,7 @@ def get_n_spots(row):
     # try to get the n_spots from family_biosample_spots, otherwise default to 0 
     ##### CHECK THIS ##### will have divide by 0 error if the mapping is wrong
     try:
-        return family_biosample_spots[row['biosample_id'][1:-1]]
+        return family_biosample_spots[row['biosample_id']]
     except:
         return 0
 
@@ -67,12 +66,9 @@ def get_log_fold_change(true, false):
     else:
         return np.log2(true / false)
 
-def mean_diff_statistic(x, y, axis):
-    # if -ve, then y is larger than x
-    return np.mean(x, axis=axis) - np.mean(y, axis=axis)
+# ---------------------------------------------
 
-# --------------- MWAS RFAM RUN SETUP ---------------
-warnings.filterwarnings('ignore') # FIX THIS LATER TO NOT IGNORE WARNINGS
+warnings.filterwarnings('ignore') # FIX THIS LATERE TO NOT IGNORE WARNINGS
 
 # database connection details
 host = "serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com"
@@ -81,9 +77,12 @@ user = "public_reader"
 password = "serratus"
 
 # read in the file name from the command line
+if len(sys.argv) != 2:
+    print('Please provide a file name')
+    sys.exit(1)
 family_file = sys.argv[1]
 
-# RUN ls family_groups | parallel 'python mwas_rfam.py'
+# file name provided with ls family_groups/ | parallel -j 3 "python mwas_rfam.py"
 
 # create a logger with the file name
 logger = logging.getLogger(family_file)
@@ -99,7 +98,6 @@ logger.setLevel(logging.INFO)
 file_num = family_file.replace('.txt', '').split('_')[-1]
 
 # # load information from pickles
-# TODO: add sql queries
 with open(f'../pickles/rfam_df_{file_num}.pickle', 'rb') as f:
     rfam_df = pickle.load(f)
 with open(f'../pickles/srarun_df_{file_num}.pickle', 'rb') as f:
@@ -120,11 +118,7 @@ headers = {'Host': 'serratus-biosamples.s3.amazonaws.com'}
 
 s3 = boto3.resource('s3')
 bucket = s3.Bucket('serratus-biosamples')
-
-# set the output columns for the MWAS dataframe
-output_cols = ['bioproject_id', 'family', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false', 'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
-
-# ---------------------------------------------
+logger.info(f'Connected to S3 bucket')
 
 # files are located in the family_groups directory
 with open('family_groups/' + family_file, 'r') as f:
@@ -134,9 +128,6 @@ with open('family_groups/' + family_file, 'r') as f:
         # remove the new line character
         family = family.strip()
         logger.info(f'Processing {family}')
-        # create a new csv file for the family, stored in the family folder, combined.csv
-        key = f'mwas/{family}/combined.csv'
-        bucket.put_object(Key=key, Body=','.join(output_cols) + '\n')
 
         # subset the rfam_df to the family of interest
         family_df = rfam_df[rfam_df['family_group'] == family]
@@ -146,7 +137,6 @@ with open('family_groups/' + family_file, 'r') as f:
         family_biosamples_n_reads = {}
         family_biosample_spots = {}
         family_df.apply(family_biosamples_mapper, axis=1)
-
         # average the n_reads and spots for each biosample
         for biosample in family_biosamples_n_reads:
             family_biosamples_n_reads[biosample] = np.mean(family_biosamples_n_reads[biosample])
@@ -160,25 +150,26 @@ with open('family_groups/' + family_file, 'r') as f:
         if None in bioprojects:
             bioprojects.remove(None)
 
+        print(family_df.shape)
+        print(family_df.columns)
+        # get the bioprojects for the family and remove None from the list
+        bioprojects = list(family_df['bio_project'].unique())
+        if None in bioprojects: # find a nicer way to do this
+            bioprojects.remove(None)
+        bioprojects = [bp for bp in bioprojects if pd.notna(bp)]
+
+        # iterate through the bioprojects for the family
         for bioproject_id in bioprojects:
             # --------------- SET UP DF FOR MWAS ---------------
-            # get the csv file for the bioproject
-            url = base_url + bioproject_id + '.csv'
-            
-            # connection reset by peer error?
+            # get the df for the bioproject from local
+            filename = str(bioproject_id) + '.pickle'
+
             try:
-                response = requests.get(url, headers=headers)
-                if response.status_code != 200:
-                    # skip the bioproject if it doesn't exist
-                    logger.warning(f'Error: {response.status_code} for {bioproject_id}')
-                    continue
-
-                # read the csv file into a dataframe
-                bp_df = pd.read_csv(io.StringIO(response.content.decode('utf-8')), quoting=csv.QUOTE_NONE)
-
+                with open(f'pickles/bioprojects/{filename}', 'rb') as f:
+                    bp_df = pickle.load(f)
             except Exception as e:
-                logger.warning(f'Error occurred while making API call: {e}')
-                continue
+                logger.error(f'Error reading pickle file {filename}: {e}')
+                continue 
 
             # skip if there are two rows or less
             num_rows = bp_df.shape[0]
@@ -192,7 +183,7 @@ with open('family_groups/' + family_file, 'r') as f:
 
             # add the rpm column to the dataframe
             bp_df['rpm'] = bp_df.apply(lambda row: row['n_reads'] / row['n_spots'] * 1000000 if row['n_spots'] != 0 else 0, axis=1)
-
+            
             # --------------- SELECTING COLUMNS TO TEST ---------------
             # get the list of testable columns in the dataframe
             remove_cols = {'biosample_id','n_reads','n_spots','rpm'}
@@ -212,7 +203,7 @@ with open('family_groups/' + family_file, 'r') as f:
                 metadata_counts[col] = counts
 
             existing_samples = list()
-            target_col_runs = {} # store the biosamples that correspond to the target term
+            target_col_runs = {}
 
             # iterate through the values for all columns that can be tested
             for target_col, value_counts in metadata_counts.items():
@@ -236,14 +227,14 @@ with open('family_groups/' + family_file, 'r') as f:
                         existing_samples.append(target_term_biosamples)
                         target_col_runs[target_col_name] = target_term_biosamples
 
-            # --------------- RUN PERMUTATION TEST ---------------
-             # set up the columns for the output df
+            # --------------- RUN TTESTS ---------------
+            # set up the columns for the output df
+            output_cols = ['bioproject_id', 'family', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false', 'sd_rpm_true', 'sd_rpm_false', 'fold_change', 't_statistic', 'p_value']
             output_dict = {col: [] for col in output_cols}
 
             for target_col, biosamples in target_col_runs.items():
                 num_true = len(biosamples)
                 num_false = num_rows - num_true
-
                 # get the rpm values for the target and remainng biosamples
                 true_rpm = bp_df[bp_df['biosample_id'].isin(biosamples)]['rpm']
                 false_rpm = bp_df[~bp_df['biosample_id'].isin(biosamples)]['rpm']
@@ -257,19 +248,16 @@ with open('family_groups/' + family_file, 'r') as f:
 
                 # calculate fold change and check if any values are nan
                 fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
-
-                # use scipy permutation test
-                res = stats.permutation_test((true_rpm, false_rpm), statistic=statistic, n_resamples=10000, vectorized=True)
-                p_value = res.pvalue
-                test_statistic = res.statistic
-
-                # use scipy ttest
-                # t_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true, mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false, equal_var=False)
+                # calculate t-statistic and p-value
+                t_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true, mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false, equal_var=False)
 
                 # extract metadata_field (column names) and metadata_value (column values)
                 metadata_tmp = target_col.split('\r') # pairs of metadata_field and metadata_value for aggregated columns
+                # metadata_field = '\t'.join(metadata_tmp[::2])
+                # metadata_value = '\t'.join(metadata_tmp[1::2])
                 metadata_field = '\t'.join(pair.split('\t')[0] for pair in metadata_tmp)
                 metadata_value = '\t'.join(pair.split('\t')[1] for pair in metadata_tmp)
+
 
                 # add values to output dict
                 output_dict['bioproject_id'].append(bioproject_id)
@@ -283,26 +271,25 @@ with open('family_groups/' + family_file, 'r') as f:
                 output_dict['sd_rpm_true'].append(sd_rpm_true)
                 output_dict['sd_rpm_false'].append(sd_rpm_false)
                 output_dict['fold_change'].append(fold_change)
-                output_dict['test_statistic'].append(test_statistic)
+                output_dict['t_statistic'].append(t_statistic)
                 output_dict['p_value'].append(p_value)
 
-            # create the output df and sort by p_value FIX THIS
+            # create the output df and sort by p_value
             mwas_df = pd.DataFrame(output_dict)
             mwas_df = mwas_df.sort_values(by='p_value')
 
-
-            # log if there are significant results 
+            # log if there are significant results
             num_significant = mwas_df[mwas_df['p_value'] < 0.05].shape[0]
             if num_significant > 0:
                 logger.info(f'{bioproject_id} - {num_significant} significant results')
             
-            # write the mwas_df to an individual csv file on S3 (per bioproject_id, per family)
+            # write the mwas_df to a csv file on S3
             key = f's3://serratus-biosamples/mwas/{family}/{bioproject_id}.csv'
-            # mwas_df.to_csv(key, index=False)
-            # append the mwas_df to the combined file
-            mwas_df.to_csv(f'combined.csv', mode='a', header=False, index=False) # WRITE TO DISK
+            mwas_df.to_csv(key, index=False)
             logger.info(f'Finished {bioproject_id}')
+            exit()
         logger.info(f'Finished MWAS for {family}')
+        # break
 
 print(f'Finished processing {family_file}')
 logger.info(f'Finished processing {family_file}')
