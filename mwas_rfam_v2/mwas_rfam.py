@@ -13,6 +13,7 @@ import io
 import pickle
 import csv
 import boto3
+import time
 
 # --------------- HELPER FUNCTIONS ---------------
 def family_biosamples_mapper(row):
@@ -65,6 +66,10 @@ def get_log_fold_change(true, false):
         return np.inf
     else:
         return np.log2(true / false)
+
+def mean_diff_statistic(x, y, axis):
+    # if -ve, then y is larger than x
+    return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 # ---------------------------------------------
 
@@ -147,19 +152,13 @@ with open('family_groups/' + family_file, 'r') as f:
 
         # get the bioprojects for the family and remove None from the list
         bioprojects = list(family_df['bio_project'].unique())
-        if None in bioprojects:
-            bioprojects.remove(None)
-
-        print(family_df.shape)
-        print(family_df.columns)
-        # get the bioprojects for the family and remove None from the list
-        bioprojects = list(family_df['bio_project'].unique())
         if None in bioprojects: # find a nicer way to do this
             bioprojects.remove(None)
         bioprojects = [bp for bp in bioprojects if pd.notna(bp)]
 
         # iterate through the bioprojects for the family
         for bioproject_id in bioprojects:
+            logger.info(f'Processing {bioproject_id}')
             # --------------- SET UP DF FOR MWAS ---------------
             # get the df for the bioproject from local
             filename = str(bioproject_id) + '.pickle'
@@ -248,8 +247,27 @@ with open('family_groups/' + family_file, 'r') as f:
 
                 # calculate fold change and check if any values are nan
                 fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
-                # calculate t-statistic and p-value
-                t_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true, mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false, equal_var=False)
+
+                # if num–true or num_false is less than 5, run a t test
+                # otherwise run a permutation test
+                if min(num_false, num_true) < 5:
+                    # scipy t test
+                    t_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true, mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false, equal_var=False)
+                else:
+                    # run a permutation test
+                    try:
+                        now = time.time()
+                        res = stats.permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=10000, vectorized=True)
+                        logger.info(f'Permutation test took {time.time() - now} seconds')
+                        p_value = res.pvalue
+                        test_statistic = res.statistic
+                    except Exception as e:
+                        print(e)
+                        print(bioproject_id)
+                        print(num_true)
+                        print(num_false)
+                        exit()
+
 
                 # extract metadata_field (column names) and metadata_value (column values)
                 metadata_tmp = target_col.split('\r') # pairs of metadata_field and metadata_value for aggregated columns
@@ -287,9 +305,7 @@ with open('family_groups/' + family_file, 'r') as f:
             key = f's3://serratus-biosamples/mwas/{family}/{bioproject_id}.csv'
             mwas_df.to_csv(key, index=False)
             logger.info(f'Finished {bioproject_id}')
-            exit()
         logger.info(f'Finished MWAS for {family}')
-        # break
 
 print(f'Finished processing {family_file}')
 logger.info(f'Finished processing {family_file}')
