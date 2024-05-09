@@ -128,7 +128,8 @@ bucket = s3.Bucket('serratus-biosamples')
 logger.info(f'Connected to S3 bucket')
 
 # files are located in the family_groups directory
-with open('family_groups/' + family_file, 'r') as f:
+# in the rerun, look in the new location for the family groups
+with open('family_groups_rerun/' + family_file, 'r') as f:
     print(f'Processing {family_file}')
     logger.info(f'Processing {family_file}')
     for family in f:
