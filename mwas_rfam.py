@@ -552,12 +552,13 @@ def serratus_bio_project_mode(bioprojects: tuple[str, ...], value: str = 'n_read
             FROM srarun as t1
             JOIN rfamily as t2
                 ON t1.run = t2.run_id
-            WHERE bio_project in (%s);
+            WHERE bio_project in %s;
             """
 
     with psycopg2.connect(host=host, database=database, user=user, password=password) as conn:
         try:
-            df = pd.read_sql_query(bio_project_query % (value, bioprojects), conn)
+            bioproject_q = bioprojects if len(bioprojects) > 1 else bioprojects[0]
+            df = pd.read_sql_query(bio_project_query % (value, bioproject_q), conn)
             df['spots'] = df['spots'].replace(0, 1000000)
             return df
         except Exception as e:
@@ -578,25 +579,31 @@ if __name__ == '__main__':
 
     if arg1 == "-bpm":
         if len(sys.argv) > 2:
-            df = serratus_bio_project_mode(tuple(sys.argv[2:]))
-            mwas(df, 'n_reads', 'bio_sample', 'n_spots')
+            input_df = serratus_bio_project_mode(tuple(sys.argv[2:]))
+            if input_df is None:
+                print("Error: Unable to retrieve data from database")
+                sys.exit(1)
+            output_df = mwas(input_df, 'n_reads', 'bio_sample', 'n_spots')
+            if output_df is None:
+                print("Error: Unable to retrieve data from database")
+                sys.exit(1)
             # save the df to csv file
-            df.to_csv(f'mwas_{sys.argv[2]}.csv', index=False)
+            output_df.to_csv(f'mwas_{sys.argv[2]}.csv', index=False)
 
         else:
             print("Not enough arguments.\nUsage: python mwas.py -bpm <bioproject1> <bioproject2> ...")
             sys.exit(1)
-    if arg1 == "-s":
-        if len(sys.argv) > 2:
-            single_mode(sys.argv[2:])
-        else:
-            print("Not enough arguments.\nUsage: python mwas.py <value> -f <family1> <family2> ...")
-            sys.exit(1)
-
-    else:  # for family group file mode
-        if arg1.endswith('.txt'):
-            # arg1 is read in the file name, will be run with GNU parallel
-            list_file_mode(arg1)
-        else:
-            print("Invalid file name.\nUsage: python mwas.py <value> <family_group_file.txt>")
-            sys.exit(1)
+    # if arg1 == "-s":
+    #     if len(sys.argv) > 2:
+    #         single_mode(sys.argv[2:])
+    #     else:
+    #         print("Not enough arguments.\nUsage: python mwas.py <value> -f <family1> <family2> ...")
+    #         sys.exit(1)
+    #
+    # else:  # for family group file mode
+    #     if arg1.endswith('.txt'):
+    #         # arg1 is read in the file name, will be run with GNU parallel
+    #         list_file_mode(arg1)
+    #     else:
+    #         print("Invalid file name.\nUsage: python mwas.py <value> <family_group_file.txt>")
+    #         sys.exit(1)
