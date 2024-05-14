@@ -24,7 +24,7 @@ def family_biosamples_mapper(row, family_biosamples_n_reads, family_biosample_sp
         # family_biosample_runs[row['bio_sample']] = [row['run_id']] # TO BE USED IF MAPPING IS DONE FROM RUNS
 
 
-def df_mapper(row, accession_type: str, parameters_to_copy: tuple[str], paramater_dicts: tuple[dict], main_dict: dict = None):
+def df_mapper(row, accession_type: str, parameters_to_copy: tuple[str], paramater_dicts: list[dict], main_dict: dict = None):
     """Note: paramters_to_copy should be a tuple of strings, and paramater_dicts should be a tuple of dictionaries
     and their orders should match.
 
@@ -40,10 +40,10 @@ def df_mapper(row, accession_type: str, parameters_to_copy: tuple[str], paramate
 
     if row[accession_type] in main_dict:
         for i, param in enumerate(paramater_dicts):
-            param[row[param]].append(row[parameters_to_copy[i]])
+            param[row[accession_type]].append(row[parameters_to_copy[i]])
     else:
         for i, param in enumerate(paramater_dicts):
-            param[row[param]] = row[parameters_to_copy[i]]
+            param[row[accession_type]] = [row[parameters_to_copy[i]]]
 
 
 def family_bioproject_mapper(row, srarun_bioprojects_map):
@@ -372,7 +372,7 @@ def list_file_mode(family_file: str) -> int:
     return 0
 
 
-def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sample', spots: str = 'n_spots') -> pd.DataFrame | None:
+def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sample', spots: str = 'spots') -> pd.DataFrame | None:
     """
     Run the MWAS pipeline
     assume dataset has n_spots and value and accession_type are columns in the dataframe
@@ -389,16 +389,20 @@ def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sam
 
     # map the biosamples in the family to n_reads and spots
     acce_value_abundance, acce_spots = {}, {}
-    df.apply(df_mapper, args=(accession_type, (value, spots), (acce_value_abundance, acce_spots), acce_value_abundance), axis=1)
+    try:
+        df.apply(df_mapper, args=(accession_type, (value, spots), (acce_value_abundance, acce_spots), acce_value_abundance), axis=1)
+    except Exception as e:
+        print(f'Error: {e}')
+        return None
 
     # average the n_reads and spots for each biosample
     for entry in acce_value_abundance:
-        acce_value_abundance[entry] = np.mean(acce_value_abundance[entry])
+        acce_value_abundance[entry] = np.mean(acce_value_abundance[entry])  # may be redundant (but will it also be redundant in generalized ver?) since usually all acce_spots vals are the same within each list (e.g. {'SAMEA4858883': [12166001, 12166001, 12166001, ...]})
         acce_spots[entry] = np.mean(acce_spots[entry])
 
     # add the rpm column to the dataframe
     df[value] = df.apply(get_map_value_from_df, args=(accession_type, (acce_value_abundance,), np.nan), axis=1)
-    df[spots] = df.apply(get_n_spots, args=(accession_type, (acce_spots,), np.nan), axis=1)
+    df[spots] = df.apply(get_map_value_from_df, args=(accession_type, (acce_spots,), 0), axis=1)
     df['rpm'] = df.apply(lambda row: row[value] / row[spots] * 1000000 if row[spots] != 0 else 0, axis=1)
 
     # --------------- SELECTING COLUMNS TO TEST ---------------
@@ -492,6 +496,8 @@ def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sam
         metadata_value = '\t'.join(pair.split('\t')[1] for pair in metadata_tmp)
 
         # add values to output dict
+        output_dict['accessions'].append(accession_type)
+        output_dict['group'].append(value)
         output_dict['metadata_field'].append(metadata_field)
         output_dict['metadata_value'].append(metadata_value)
         output_dict['num_true'].append(num_true)
@@ -532,7 +538,6 @@ def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sam
 
 def serratus_bio_project_mode(bioprojects: tuple[str, ...], value: str = 'n_reads') -> pd.DataFrame | None:
     """"""
-    import requests
     import psycopg2
 
     host = "serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com"
@@ -552,7 +557,7 @@ def serratus_bio_project_mode(bioprojects: tuple[str, ...], value: str = 'n_read
             FROM srarun as t1
             JOIN rfamily as t2
                 ON t1.run = t2.run_id
-            WHERE bio_project in %s;
+            WHERE bio_project = '%s';
             """
 
     with psycopg2.connect(host=host, database=database, user=user, password=password) as conn:
@@ -583,9 +588,9 @@ if __name__ == '__main__':
             if input_df is None:
                 print("Error: Unable to retrieve data from database")
                 sys.exit(1)
-            output_df = mwas(input_df, 'n_reads', 'bio_sample', 'n_spots')
+            output_df = mwas(input_df, 'n_reads', 'bio_sample', 'spots')
             if output_df is None:
-                print("Error: Unable to retrieve data from database")
+                print("Error: MWAS failed to run.")
                 sys.exit(1)
             # save the df to csv file
             output_df.to_csv(f'mwas_{sys.argv[2]}.csv', index=False)
