@@ -1,3 +1,6 @@
+import sys
+if '--nodebug' not in sys.argv:
+    import pdb
 # pip install --upgrade psycopg2-binary pandas numpy scipy requests boto3 
 
 # import required libraries
@@ -7,7 +10,6 @@ import scipy.stats as stats
 import requests
 import warnings
 import logging
-import sys
 import pickle
 import boto3
 from filelock import FileLock
@@ -69,7 +71,8 @@ def mean_diff_statistic(x, y, axis):
     return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 # ---------------------------------------------
-
+if '--nodebug' not in sys.argv:
+    pdb.set_trace()
 warnings.filterwarnings('ignore') # FIX THIS LATER
 
 # database connection details
@@ -96,25 +99,25 @@ file_num = family_file.replace('.txt', '').split('_')[-1]
 
 # load information from pickles, lock each pickle file as it is read
 logger.info('Loading pickles')
-rfam_lock = FileLock('/mnt/mwas/rfam_df.pickle.lock')
+rfam_lock = FileLock('/home/ubuntu/s3_downloads/rfam_df.pickle.lock')
 with rfam_lock:
-    with open(f'/mnt/mwas/rfam_df.pickle', 'rb') as f:
+    with open(f'/home/ubuntu/s3_downloads/rfam_df.pickle', 'rb') as f:
         rfam_df = pickle.load(f)
 
-srarun_lock = FileLock('/mnt/mwas/srarun_df.pickle.lock')
+srarun_lock = FileLock('/home/ubuntu/s3_downloads/srarun_df.pickle.lock')
 with srarun_lock:
-    with open(f'/mnt/mwas/srarun_df.pickle', 'rb') as f:
+    with open(f'/home/ubuntu/s3_downloads/srarun_df.pickle', 'rb') as f:
         srarun_df = pickle.load(f)
 
-bs_map_lock = FileLock('/mnt/mwas/srarun_biosamples_map.pickle.lock')
+bs_map_lock = FileLock('/home/ubuntu/s3_downloads/srarun_biosamples_map.pickle.lock')
 with bs_map_lock:
-    with open(f'/mnt/mwas/srarun_biosamples_map.pickle', 'rb') as handle:
+    with open(f'/home/ubuntu/s3_downloads/srarun_biosamples_map.pickle', 'rb') as handle:
         # mapping from biosamples (in srarun_df) to 0 for default count
         srarun_biosamples_map = pickle.load(handle) 
 
-bp_map_lock = FileLock('/mnt/mwas/srarun_bioprojects_map.pickle.lock')
+bp_map_lock = FileLock('/home/ubuntu/s3_downloads/srarun_bioprojects_map.pickle.lock')
 with bp_map_lock:
-    with open(f'/mnt/mwas/srarun_bioprojects_map.pickle', 'rb') as handle:
+    with open(f'/home/ubuntu/s3_downloads/srarun_bioprojects_map.pickle', 'rb') as handle:
         # mapping from biosamples (in srarun_df) to bioprojects
         srarun_bioprojects_map = pickle.load(handle)
 
@@ -123,9 +126,9 @@ logger.info(f'Loaded pickles')
 # set output cols for the mwas df
 output_cols = ['bioproject_id', 'family', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false', 'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
 
-s3 = boto3.resource('s3')
-bucket = s3.Bucket('serratus-biosamples')
-logger.info(f'Connected to S3 bucket')
+# s3 = boto3.resource('s3')
+# bucket = s3.Bucket('serratus-biosamples')
+# logger.info(f'Connected to S3 bucket')
 
 # files are located in the family_groups directory
 with open('family_groups/' + family_file, 'r') as f:
@@ -138,14 +141,17 @@ with open('family_groups/' + family_file, 'r') as f:
 
         logger.info(f'Writing combined.csv file to S3')
         # create a new csv file for the family, stored in the family folder, combined.csv
-        key = f's3://serratus-mwas/{family}/combined.csv'
-        bucket.put_object(Key=key, Body=','.join(output_cols) + '\n')
-        logger.info(f'Successfully written combined.csv file to S3')
+        # key = f's3://serratus-mwas/{family}/combined.csv'
+        # bucket.put_object(Key=key, Body=','.join(output_cols) + '\n')
+        # logger.info(f'Successfully written combined.csv file to S3')
 
         # subset the rfam_df to the family of interest
         family_df = rfam_df[rfam_df['family_group'] == family]
-        family_df = pd.merge(family_df[['run_id', 'n_reads']], srarun_df[['run', 'bio_sample', 'spots']], left_on='run_id', right_on='run')
-
+        try:
+            family_df = pd.merge(family_df[['run_id', 'n_reads']], srarun_df[['run', 'bio_sample', 'spots']], left_on='run_id',
+                                 right_on='run')
+        except Exception as e:
+            print("Error during merging:", e)
         # map the biosamples in the family to n_reads and spots
         family_biosamples_n_reads = {}
         family_biosample_spots = {}
@@ -171,7 +177,7 @@ with open('family_groups/' + family_file, 'r') as f:
             # get the df for the bioproject from tmpfs
             filename = str(bioproject_id) + '.pickle'
             try:
-                with open(f'/mnt/mwas/bioprojects/{filename}', 'rb') as f:
+                with open(f'/home/ubuntu/s3_downloads/bioprojects/{filename}', 'rb') as f:
                     bp_df = pickle.load(f)
             except Exception as e:
                 logger.error(f'Error reading pickle file {filename}: {e}')
@@ -310,12 +316,12 @@ with open('family_groups/' + family_file, 'r') as f:
                 logger.info(f'{family}, {bioproject_id} - {num_significant} significant results')
             
             # write the mwas_df to a csv file (per bioproject) on S3
-            bp_key = f's3://serratus-mwas/{family}/{bioproject_id}.csv'
+            bp_key = f'output_csvs/{family}/{bioproject_id}.csv'
             mwas_df.to_csv(bp_key, index=False)
 
             # WRITE TO COMBINED FILE ON S3
-            key = f's3://serratus-mwas/{family}/combined.csv'
-            mwas_df.to_csv(key, mode='a', header=False, index=False) 
+            # key = f'~/combined_output_csvs/{family}/combined.csv'
+            # mwas_df.to_csv(key, mode='a', header=False, index=False) 
 
             logger.info(f'Finished processing bioproject {bioproject_id}')
         logger.info(f'Finished MWAS for {family}')
