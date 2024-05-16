@@ -1,29 +1,29 @@
 #!/bin/bash
 
-# Run the process
-your_command_here &
+# Check if a command is provided as an argument
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <command>"
+    exit 1
+fi
 
-# Get the PID of the process
-PID=$!
+# Run the provided command
+"$@"
 
-# Wait for the process to finish
-wait $PID
-
-# Get the exit status of the process
+# Get the exit status of the command
 EXIT_STATUS=$?
 
-# Check if the process was killed by a signal
+# Check if the command was killed by a signal
 if [ $EXIT_STATUS -ge 128 ]; then
     SIGNAL=$(($EXIT_STATUS - 128))
-    echo "Process was killed by signal $SIGNAL" >&2
+    echo "Command was killed by signal $SIGNAL" >&2
 
     # Check for OOM kill
     if [ $SIGNAL -eq 9 ]; then
         echo "Checking for OOM kill in syslog..."
-        if grep -i "killed process $PID" /var/log/syslog; then
-            echo "Process was killed by OOM Killer" >&2
+        if grep -i "killed process $$" /var/log/syslog; then
+            echo "Command was killed by OOM Killer" >&2
         fi
     fi
 else
-    echo "Process exited with status $EXIT_STATUS" >&2
+    echo "Command exited with status $EXIT_STATUS" >&2
 fi
