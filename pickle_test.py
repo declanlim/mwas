@@ -4,7 +4,7 @@ if ('--debug' in sys.argv):
 	import pdb
 	pdb.set_trace()
 
-with open('/home/ubuntu/s3_downloads/bioprojects/PRJDB10241.pickle', 'rb') as f:
+with open('/home/ubuntu/s3_downloads/bioprojects/PRJEB28138.pickle', 'rb') as f:
 	bioproj_df = pickle.load(f)
 
 print("loaded bioproject")
