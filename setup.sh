@@ -1,15 +1,18 @@
-# install required software 
+# install required software
 sudo yum install git python pip gcc python3-devel parallel
 
 # install aws cli
 curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
+# curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+  #unzip awscliv2.zip
+  #sudo ./aws/install
 unzip awscliv2.zip
 rm awscliv2.zip
 sudo ./aws/install
 
 # must be done by hand?
 aws configure
-aws configure set default.s3.max_concurrent_requests 300
+aws configure set default.s3.max_concurrent_requests 300  # 300 is too much??? for a small (RAM) machine
 
 
 python -m pip install --upgrade pip

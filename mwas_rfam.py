@@ -10,6 +10,7 @@ import sys
 
 MWAS_COLS = ['accessions', 'group', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true',
              'mean_rpm_false', 'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
+PICKLE_DIR = '/mnt/mwas'
 
 
 # --------------- HELPER FUNCTIONS ---------------
@@ -140,27 +141,27 @@ def list_file_mode(family_file: str) -> int:
 
     # load information from pickles, lock each pickle file as it is read
     logger.info('Loading pickles')
-    rfam_lock = FileLock('/mnt/mwas/rfam_df.pickle.lock')
+    rfam_lock = FileLock(f'{PICKLE_DIR}/rfam_df.pickle.lock')
     with rfam_lock:
-        with open(f'/mnt/mwas/rfam_df.pickle', 'rb') as f:
-            rfam_df = pickle.load(f)
+        with open(f'{PICKLE_DIR}/rfam_df.pickle', 'rb') as f:
+            rfam_df = pickle.load(f)  # rfam dataframe
 
-    srarun_lock = FileLock('/mnt/mwas/srarun_df.pickle.lock')
+    srarun_lock = FileLock(f'{PICKLE_DIR}/srarun_df.pickle.lock')
     with srarun_lock:
-        with open(f'/mnt/mwas/srarun_df.pickle', 'rb') as f:
-            srarun_df = pickle.load(f)
+        with open(f'{PICKLE_DIR}/srarun_df.pickle', 'rb') as f:
+            srarun_df = pickle.load(f)  # srarun dataframe
 
-    bs_map_lock = FileLock('/mnt/mwas/srarun_biosamples_map.pickle.lock')
+    bs_map_lock = FileLock(f'{PICKLE_DIR}/srarun_biosamples_map.pickle.lock')
     with bs_map_lock:
-        with open(f'/mnt/mwas/srarun_biosamples_map.pickle', 'rb') as handle:
+        with open(f'{PICKLE_DIR}/srarun_biosamples_map.pickle', 'rb') as handle:
             # mapping from biosamples (in srarun_df) to 0 for default count
-            srarun_biosamples_map = pickle.load(handle)
+            srarun_biosamples_map = pickle.load(handle)  #  {'SAMN02580589': 0, 'SAMN14501336': 0, ...} format, where biosample_id: some value (why is it always 0?)
 
-    bp_map_lock = FileLock('/mnt/mwas/srarun_bioprojects_map.pickle.lock')
+    bp_map_lock = FileLock(f'{PICKLE_DIR}/srarun_bioprojects_map.pickle.lock')
     with bp_map_lock:
-        with open(f'/mnt/mwas/srarun_bioprojects_map.pickle', 'rb') as handle:
+        with open(f'{PICKLE_DIR}/srarun_bioprojects_map.pickle', 'rb') as handle:
             # mapping from biosamples (in srarun_df) to bioprojects
-            srarun_bioprojects_map = pickle.load(handle)
+            srarun_bioprojects_map = pickle.load(handle)  # dictionary of {'SAMN12018616': 'PRJNA548153', 'SAMN12018437': 'PRJNA548153', ...} where biosample_id: bio_project... But if you look at an sql query from srarun with a WHERE bio_sample, you'll see that one sample can belon to multiple bioprojects, so then how does this dictionary accurately tell us bioproject? answer: one biosample has multiple runs... but that still doesn't explain why the pickle is a map, since one sample should map to mult. bioprojects
 
     logger.info(f'Loaded pickles')
 
@@ -188,9 +189,26 @@ def list_file_mode(family_file: str) -> int:
             logger.info(f'Successfully written combined.csv file to S3')
 
             # subset the rfam_df to the family of interest
-            family_df = rfam_df[rfam_df['family_group'] == family]
-            family_df = pd.merge(family_df[['run_id', 'n_reads']], srarun_df[['run', 'bio_sample', 'spots']], left_on='run_id',
-                                 right_on='run')
+            family_df = rfam_df[rfam_df['family_group'] == family]  # now our df is only one family_group in the family_group col, e
+#             e.g.
+#            run_id     family_group  percent_identity  n_reads
+# 0         SRR2045392  Tombusviridae-8                60        2
+# 1         SRR2047477  Tombusviridae-8                98        4
+# 2         SRR2061988  Tombusviridae-8               100        1
+# 6         SRR2063894  Tombusviridae-8                86        3
+# 7         SRR2063902  Tombusviridae-8                86        2
+# ...              ...              ...               ...      ...
+# 16466172  SRR9995131  Tombusviridae-8                95      175
+# 16466370  SRR9995125  Tombusviridae-8                83      201
+# 16466559  SRR9995128  Tombusviridae-8                94      286
+# 16466650  SRR9995129  Tombusviridae-8                89      190
+# 16466960  SRR9997707  Tombusviridae-8                84      226
+# [28180 rows x 4 columns]
+            try:
+                family_df = pd.merge(family_df[['run_id', 'n_reads']], srarun_df[['run', 'bio_sample', 'spots']], left_on='run_id',
+                                     right_on='run')
+            except Exception as e:
+                print("Error during merging:", e)
 
             # map the biosamples in the family to n_reads and spots
             family_biosamples_n_reads = {}
@@ -216,8 +234,8 @@ def list_file_mode(family_file: str) -> int:
                 # --------------- SET UP DF FOR MWAS ---------------
                 # get the df for the bioproject from tmpfs
                 filename = str(bioproject_id) + '.pickle'
-                try:
-                    with open(f'/mnt/mwas/bioprojects/{filename}', 'rb') as f:
+                try:  # getting the special metadata (not queriable from serratus)
+                    with open(f'{PICKLE_DIR}/bioprojects/{filename}', 'rb') as f:
                         bp_df = pickle.load(f)
                 except Exception as e:
                     logger.error(f'Error reading pickle file {filename}: {e}')
@@ -345,6 +363,7 @@ def list_file_mode(family_file: str) -> int:
                     output_dict['fold_change'].append(fold_change)
                     output_dict['test_statistic'].append(test_statistic)
                     output_dict['p_value'].append(p_value)
+                    # TODO: status column
 
                 # create the output df and sort by p_value
                 mwas_df = pd.DataFrame(output_dict)
@@ -460,10 +479,8 @@ def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sam
 
         # calculate desecriptive stats
         # NON CORRECTED VALUES
-        mean_rpm_true = np.nanmean(true_rpm)
-        mean_rpm_false = np.nanmean(false_rpm)
-        sd_rpm_true = np.nanstd(true_rpm)
-        sd_rpm_false = np.nanstd(false_rpm)
+        mean_rpm_true, mean_rpm_false = np.nanmean(true_rpm), np.nanmean(false_rpm)
+        sd_rpm_true, sd_rpm_false = np.nanstd(true_rpm), np.nanstd(false_rpm)\
 
         # skip if both conditions have 0 reads
         if mean_rpm_true == mean_rpm_false == 0:
@@ -496,19 +513,10 @@ def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sam
         metadata_value = '\t'.join(pair.split('\t')[1] for pair in metadata_tmp)
 
         # add values to output dict
-        output_dict['accessions'].append(accession_type)
-        output_dict['group'].append(value)
-        output_dict['metadata_field'].append(metadata_field)
-        output_dict['metadata_value'].append(metadata_value)
-        output_dict['num_true'].append(num_true)
-        output_dict['num_false'].append(num_false)
-        output_dict['mean_rpm_true'].append(mean_rpm_true)
-        output_dict['mean_rpm_false'].append(mean_rpm_false)
-        output_dict['sd_rpm_true'].append(sd_rpm_true)
-        output_dict['sd_rpm_false'].append(sd_rpm_false)
-        output_dict['fold_change'].append(fold_change)
-        output_dict['test_statistic'].append(test_statistic)
-        output_dict['p_value'].append(p_value)
+        output_cols = (accession_type, value, metadata_field, metadata_value, num_true, num_false, mean_rpm_true, mean_rpm_false,
+                       sd_rpm_true, sd_rpm_false, fold_change, test_statistic, p_value)
+        for i, col in enumerate(MWAS_COLS):
+            output_dict[col].append(output_cols[i])
 
     # create the output df and sort by p_value
     mwas_df = pd.DataFrame(output_dict)
@@ -536,8 +544,47 @@ def mwas(df: pd.DataFrame, value: str = 'n_read', accession_type: str = 'bio_sam
     return mwas_df
 
 
-def serratus_bio_project_mode(bioprojects: tuple[str, ...], value: str = 'n_reads') -> pd.DataFrame | None:
-    """"""
+# def serratus_bio_project_mode(bioprojects: tuple[str, ...], value: str = 'n_reads') -> pd.DataFrame | None:
+#     """"""
+#     import psycopg2
+#
+#     host = "serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com"
+#     database = "summary"
+#     user = "public_reader"
+#     password = "serratus"
+#
+#     try:
+#         conn = psycopg2.connect(host=host, database=database, user=user, password=password)
+#         conn.close()  # close the connection because we are only checking if we can connect
+#         print(f"Successfully connected to database at {host}")
+#     except:
+#         print(f"Unable to connect to database at {host}")
+#
+#     bio_project_query = """
+#             SELECT t1.run, t1.bio_sample, t1.sample, t1.bio_project, t1.scientific_name, t1.spots, t2.run_id, t2.%s
+#             FROM srarun as t1
+#             JOIN rfamily as t2
+#                 ON t1.run = t2.run_id
+#             WHERE bio_project = '%s';
+#             """
+#
+#     with psycopg2.connect(host=host, database=database, user=user, password=password) as conn:
+#         try:
+#             bioproject_q = bioprojects if len(bioprojects) > 1 else bioprojects[0]
+#             df = pd.read_sql_query(bio_project_query % (value, bioproject_q), conn)
+#             df['spots'] = df['spots'].replace(0, 1000000)
+#             return df
+#         except Exception as e:
+#             print(f"Error: {e}")
+#             return None
+
+
+def query_mode(group: str, quantifier: str, accession: tuple[str, str] | str = ('run', 'run_id'),  ) -> pd.DataFrame | None:
+    """
+    Note: if t2 is None, then group must be in srarun
+
+    default: t1 = 'srarun', t2 = 'rfamily', group = 'family_group', quantifier = 'n_reads', spots = 'spots', t1_run = 'run', t2_run = 'run_id'
+    """
     import psycopg2
 
     host = "serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com"
@@ -553,11 +600,11 @@ def serratus_bio_project_mode(bioprojects: tuple[str, ...], value: str = 'n_read
         print(f"Unable to connect to database at {host}")
 
     bio_project_query = """            
-            SELECT t1.run, t1.bio_sample, t1.sample, t1.bio_project, t1.scientific_name, t1.spots, t2.run_id, t2.%s 
+            SELECT bio_project, spots, t2.run_id, t2.%s 
             FROM srarun as t1
             JOIN rfamily as t2
                 ON t1.run = t2.run_id
-            WHERE bio_project = '%s';
+            WHERE %s = '%s';
             """
 
     with psycopg2.connect(host=host, database=database, user=user, password=password) as conn:
