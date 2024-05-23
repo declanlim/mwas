@@ -3,9 +3,10 @@
 # built-in libraries
 import os
 import sys
+import platform
 import subprocess
 import pickle
-import warnings
+# import warnings
 # import logging
 import random
 
@@ -23,15 +24,20 @@ CONNECTION_INFO = {
     'password': 'serratus'
 }
 query = """
-    SELECT bio_project, run, bio_sample, spots
+    SELECT bio_project, bio_sample, run, spots
     FROM %s -- srarun
     WHERE run in (%s)
 """
 
-# path constants
+# system & path constants
 OUTPUT_DIR_DISK = 'tmp/outputs'
 S3_METADATA_DIR = 's3://serratus-biosamples/mwas_setup/bioprojects'
 # S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
+OS = platform.system()
+SHELL_PREFIX = 'wsl ' if OS == 'Windows' else ''
+DEFAULT_MOUNT_POINT = '/tmp'
+TMPFS_DIR = '/mnt/tmpfs' # '/mnt/tmpfs'
+SYSTEM_MOUNTS = 'wmic logicaldisk get name' if OS == 'Windows' else 'mount'
 
 # processing constants
 BLOCK_SIZE = 1000
@@ -40,7 +46,7 @@ PICKLE_SPACE_LIMIT = 2 * 1024 ** 3  # 2 GB
 SCHEDULING = False
 
 # special constants
-BLACKLIST = set() # list of bioprojects that are too large
+BLACKLIST = set()  # list of bioprojects that are too large
 
 # stats constants
 MAP_UNKNOWN = 0  # maybe np.nan
@@ -52,9 +58,9 @@ OUT_COLS = ['status', 'metadata_field', 'metadata_value', 'num_true', 'num_false
 class BioProjectInfo:
     """Class to store information about a bioproject"""
 
-    def __init__(self, name: str, metadata_pickle_path: str, metadata_size: int = None) -> None:
+    def __init__(self, name: str, system_metadata_file_path: str, metadata_size: int = None) -> None:
         self.name = name
-        self.metadata_path = metadata_pickle_path
+        self.metadata_path = system_metadata_file_path
         self.metadata_size = metadata_size
         self.metadata_df = None
         self.metadata_row_count = None
@@ -116,10 +122,6 @@ def get_bioprojects_df(runs: list) -> pd.DataFrame | None:
 class MountTmpfs:
     """A mounted tmpfs filesystem referencer
     """
-    DEFAULT_MOUNT_POINT = '/tmp'
-    TMPFS_DIR = '/mnt/tmpfs'
-    SYSTEM_MOUNTS = '/proc/mounts'
-
     def __init__(self, mount_point: str = DEFAULT_MOUNT_POINT, alloc_space: int = None) -> None:
         self.mount_point = mount_point
         self.alloc_space = alloc_space  # if None, then it's a dynamic mount
@@ -127,20 +129,40 @@ class MountTmpfs:
         self.is_mounted = False
 
     def is_tmpfs_mounted(self) -> bool:
-        """checks if the given mount point is mounted as tmpfs"""
-        with open(self.SYSTEM_MOUNTS, 'r') as f:
-            mounts = f.readlines()
-        for mount in mounts:
-            parts = mount.split()
-            if parts[1] == self.mount_point and parts[2] == 'tmpfs':
-                return True
-        return False
+        """Checks if the given mount point is mounted as tmpfs or exists as a logical disk in Windows."""
+        if OS == 'Windows':
+            return self.is_drive_mounted_windows()
+        else:
+            return self.is_tmpfs_mounted_unix()
+
+    def is_drive_mounted_windows(self) -> bool:
+        """Check if the given mount point (drive letter) is a mounted drive in Windows."""
+        try:
+            output = subprocess.check_output(SYSTEM_MOUNTS, shell=True).decode()
+            drive_letters = output.split()
+            return self.mount_point.upper() in drive_letters
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to check mounted drives in Windows: {e}")
+            return False
+
+    def is_tmpfs_mounted_unix(self) -> bool:
+        """Check if the given mount point is mounted as tmpfs in Unix."""
+        try:
+            mounts = subprocess.check_output('mount', shell=True).decode().split('\n')
+            for mount in mounts:
+                parts = mount.split()
+                if len(parts) > 4 and parts[2] == self.mount_point and parts[4] == 'tmpfs':
+                    return True
+            return False
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to check mounted drives in Unix: {e}")
+            return False
 
     def mount(self) -> None:
         """Mounts the tmpfs filesystem"""
         if not self.is_tmpfs_mounted():
-            print(f"{self.mount_point} was not mounted as tmpfs (RAM), will now use {self.TMPFS_DIR}")
-            self.mount_point = self.TMPFS_DIR
+            print(f"{self.mount_point} was not mounted as tmpfs (RAM), will now use {TMPFS_DIR}")
+            self.mount_point = TMPFS_DIR
             os.makedirs(self.mount_point, exist_ok=True)
             if self.alloc_space is None:
                 subprocess.run(
@@ -167,48 +189,56 @@ def metadata_retrieval(biopj_block: list[str], file_storage: str) -> dict[str, B
     """Retrieve metadata for the given bioprojects, and organize them in a dictionary
     file_storage will usually be the tmpfs mount point (mount_tmpfs.mount_point)
     """
+    ls_file_name = "ls_batch_command_list.txt"
+    size_list_file = "file_list_with_sizes.txt"
+    cp_file_name = "cp_batch_command_list.txt"
+
     # TODO: a constant for the blacklist of projects that are too large (manually calculate this beforehand)
     # make a single s5cmd call to download all the metadata files in one request (they should get loaded to mnt)
 
     # Create a file with the list of files to check (although this takes an extra loop, s5cmd makes it worth it)
-    with open('file_list_to_check.txt', 'w') as f:
+    with open(ls_file_name, 'w+') as f:
         # writing a bucket path for each line in our file list file. A file format is needed for s5cmd
         for biopj in biopj_block:
-            f.write(f"{S3_METADATA_DIR}/{biopj}\n")
+            f.write(f'ls {S3_METADATA_DIR}/{biopj}\n')
 
     # List files with sizes using s5cmd (remember, this only looks through a single block of bioprojects)
-    command_list = "s5cmd ls --include-from file_list_to_check.txt > file_list_with_sizes.txt"
+    # note: s5cmd does not support piping, so we have to use awk here as opposed to in the previous step for each line
+    command_list = SHELL_PREFIX + f"s5cmd run {ls_file_name} | " + SHELL_PREFIX + f"awk \'{{print $(NF-1), $NF}}\' > {size_list_file}"
     subprocess.run(command_list, shell=True)
-    os.remove('file_list_to_check.txt')  # useless now that we have the file_list_with_sizes.txt
+    os.remove(ls_file_name)  # useless now that we have the file_list_with_sizes.txt
 
     # filter files by size, and also set create each BioProjectInfo object and load them into a dictionary
     biopj_info_dict = {}
     total_size = 0
-    with open('file_list_with_sizes.txt', 'r') as read_file, open('files_to_download.txt', 'w') as write_file:
+    with open(size_list_file, 'r') as read_file, open(cp_file_name, 'w') as write_file:
         for line in read_file:
             parts = line.split()
-            # remember, we're reading from a ls output file
-            size = int(parts[0])
-            file_path = parts[-1]
+            # remember, we're reading from a ls output file that was reformatted by awk: parts[0] is an int, parts[1] is <biopj>.pickle
+            size, file = int(parts[0]), parts[1]
 
-            biopj_name = file_path.split('/')[-1]
+            biopj_name = file.split('.')[0]  # get <biopj> from <biopj>.pickle
             if size <= MAX_PROJECT_SIZE and biopj_name not in BLACKLIST:
-                write_file.write(f"{file_path}\n")
-                system_file_path = os.path.join(file_storage, os.path.basename(file_path))
-                biopj_info_dict[biopj_name] = BioProjectInfo(biopj_name, system_file_path, size)
+                write_file.write(f"cp -f {S3_METADATA_DIR}/{file} {file_storage}\n")
+                biopj_info_dict[biopj_name] = BioProjectInfo(biopj_name, f"{file_storage}/{file}", size)
                 total_size += size
             else:
-                print(f"Skipping {biopj_name} because it is too large")
+                print(f"Skipping {biopj_name} because it is too large, with {size} bytes.")
             if total_size >= PICKLE_SPACE_LIMIT:
                 print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
                 break
 
-    os.remove('file_list_with_sizes.txt')
+    # os.remove(size_list_file)
+
+    # verify the mount is mounted
+    if not os.path.ismount(file_storage):
+        print(f"{file_storage} is not mounted. Exiting.")
+        sys.exit(1)
 
     # Download the filtered files to tmp_dir
-    command_cp = f"s5cmd cp -f --include-from files_to_download.txt {file_storage}/"
-    subprocess.run(command_cp, shell=True)
-    os.remove('files_to_download.txt')
+    command_cp = f"s5cmd run {cp_file_name}"
+    subprocess.run(SHELL_PREFIX + command_cp, shell=True)
+    # os.remove(cp_file_name)
 
     return biopj_info_dict
 
@@ -425,9 +455,12 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], file_stora
             for biopj in biopj_info_dict.keys():
                 output_file = process_bioproject(biopj_info_dict[biopj], main_df)
 
-                # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
-                with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
-                    output_file.to_csv(f)
+                if output_file is not None:
+                    # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
+                    with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
+                        output_file.to_csv(f)
+                else:
+                    print(f"There was a problem with making an output file for {biopj}")
 
         else:  # SCHEDULING
             # TODO: IMPLEMENT SCHEDULING
@@ -450,26 +483,26 @@ if __name__ == '__main__':
     # warnings.filterwarnings('ignore')  # FIX THIS LATER
 
     # Check if the correct number of arguments is provided
-    arg1 = sys.argv[1]
-    if len(sys.argv) < 1 or arg1 in ('-h', '--help'):
-        print("Usage:")
-        print("python mwas_general.py data_file.csv")
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+        print("Usage: python mwas_general.py data_file.csv")
         sys.exit(1)
-    elif arg1.endswith('.csv'):
+    elif sys.argv[1].endswith('.csv'):
         try:  # reading the input file
-            input_df = pd.read_csv(arg1)  # arg1 is a file path
+            input_df = pd.read_csv(sys.argv[1])  # arg1 is a file path
             # rename group and quantifier columns to standard names, and also save original names
             group_by, quantifying_by = input_df.columns[1], input_df.columns[2]
-            input_df.rename(columns={input_df.columns[1]: 'group', input_df.columns[2]: 'quantifier'}, inplace=True)
+            input_df.rename(columns={
+                input_df.columns[0]: 'run', input_df.columns[1]: 'group', input_df.columns[2]: 'quantifier'
+            }, inplace=True)
 
             # assume it has three columns: run, group, quantifier. And the group and quantifier columns have special names
-            if 'run' not in input_df.columns and len(input_df.columns) != 3:
-                print("Data file must have three columns in this order: run, <group>, <quantifier>")
+            if len(input_df.columns) != 3:
+                print("Data file must have three columns in this order: <run>, <group>, <quantifier>")
                 sys.exit(1)
             # check if run and group contain string values and quantifier contains numeric values
             if (input_df['run'].dtype != 'object' or input_df['group'].dtype != 'object'
                     or input_df['quantifier'].dtype not in ('float64', 'int64')):
-                print("Run column must contain string values")
+                print("run and group column must contain string values, and quantifier column must contain numeric values")
                 sys.exit(1)
         except FileNotFoundError:
             print("File not found")
