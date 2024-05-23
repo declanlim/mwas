@@ -30,7 +30,8 @@ query = """
 """
 
 # system & path constants
-OUTPUT_DIR_DISK = 'tmp/outputs'
+PICKLE_DIR = 'pickles'  # will be relative to working directory
+OUTPUT_DIR_DISK = 'outputs'
 S3_METADATA_DIR = 's3://serratus-biosamples/mwas_setup/bioprojects'
 # S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
 OS = platform.system()
@@ -131,19 +132,9 @@ class MountTmpfs:
     def is_tmpfs_mounted(self) -> bool:
         """Checks if the given mount point is mounted as tmpfs or exists as a logical disk in Windows."""
         if OS == 'Windows':
-            return self.is_drive_mounted_windows()
+            return False  # Windows does not support tmpfs mounting
         else:
             return self.is_tmpfs_mounted_unix()
-
-    def is_drive_mounted_windows(self) -> bool:
-        """Check if the given mount point (drive letter) is a mounted drive in Windows."""
-        try:
-            output = subprocess.check_output(SYSTEM_MOUNTS, shell=True).decode()
-            drive_letters = output.split()
-            return self.mount_point.upper() in drive_letters
-        except subprocess.CalledProcessError as e:
-            print(f"Failed to check mounted drives in Windows: {e}")
-            return False
 
     def is_tmpfs_mounted_unix(self) -> bool:
         """Check if the given mount point is mounted as tmpfs in Unix."""
@@ -160,14 +151,25 @@ class MountTmpfs:
 
     def mount(self) -> None:
         """Mounts the tmpfs filesystem"""
+        if OS == 'Windows':
+            if not os.path.exists(PICKLE_DIR):
+                os.mkdir(PICKLE_DIR)
+            self.mount_point = None
+            print("Windows does not support tmpfs mounting. Resorting to using working dir folder without mount...")
+            return
         if not self.is_tmpfs_mounted():
             print(f"{self.mount_point} was not mounted as tmpfs (RAM), so mounting it now.")
-            # os.makedirs(self.mount_point, exist_ok=True)
-            alloc_space = f"-o size={self.alloc_space}" if self.alloc_space else ""
-            subprocess.run(
-                f"sudo mount {alloc_space} -t tmpfs {self.mount_point.split()[-1]} {self.mount_point}",
-                shell=True
-            )
+            if OS == 'Windows':
+                # Windows-specific mounting
+                pass
+            else:
+                # Unix-specific mounting
+                alloc_space = f"-o size={self.alloc_space}" if self.alloc_space else ""
+                subprocess.run(
+                    f"sudo mount {alloc_space} -t tmpfs {self.mount_point.split()[-1]} {self.mount_point}",
+                    shell=True
+                )
+            self.is_mounted = True
         else:
             print(f"{self.mount_point} is already mounted as type tmpfs")
 
@@ -176,23 +178,39 @@ class MountTmpfs:
     def unmount(self) -> None:
         """Unmounts the tmpfs filesystem"""
         if self.is_tmpfs_mounted():
-            subprocess.run(f"sudo umount -f {self.mount_point}", shell=True)
-            self.is_mounted = False
-            print(f"{self.mount_point} was unmounted")
+            if OS == 'Windows':
+                # Windows-specific file setup
+                os.rmdir(PICKLE_DIR)
+                pass
+            else:
+                # Unix-specific unmounting
+                subprocess.run(f"sudo umount -f {self.mount_point}", shell=True)
+                self.is_mounted = False
+                print(f"{self.mount_point} was unmounted")
         else:
             print(f"{self.mount_point} is not mounted as tmpfs")
 
 
-def metadata_retrieval(biopj_block: list[str], file_storage: str) -> dict[str, BioProjectInfo]:
+def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str, BioProjectInfo]:
     """Retrieve metadata for the given bioprojects, and organize them in a dictionary
-    file_storage will usually be the tmpfs mount point (mount_tmpfs.mount_point)
+    storage will usually be the tmpfs mount point mount_tmpfs
     """
     ls_file_name = "ls_batch_command_list.txt"
     size_list_file = "file_list_with_sizes.txt"
     cp_file_name = "cp_batch_command_list.txt"
 
-    # TODO: a constant for the blacklist of projects that are too large (manually calculate this beforehand)
-    # make a single s5cmd call to download all the metadata files in one request (they should get loaded to mnt)
+    # handling windows os special treatment
+    file_storage = storage.mount_point
+    if storage.mount_point is None:
+        # this implies we're using the working directory. Make sure PICKLE_DIR exists
+        if os.path.exists(PICKLE_DIR):
+            file_storage = PICKLE_DIR
+        else:
+            print(f"Error: {PICKLE_DIR} does not exist. Exiting.")
+            sys.exit(1)
+    elif not os.path.ismount(file_storage):
+        print(f"Error: {file_storage} is not mounted. Exiting.")
+        sys.exit(1)
 
     # Create a file with the list of files to check (although this takes an extra loop, s5cmd makes it worth it)
     with open(ls_file_name, 'w+') as f:
@@ -225,18 +243,12 @@ def metadata_retrieval(biopj_block: list[str], file_storage: str) -> dict[str, B
             if total_size >= PICKLE_SPACE_LIMIT:
                 print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
                 break
-
-    # os.remove(size_list_file)
-
-    # verify the mount is mounted
-    if not os.path.ismount(file_storage):
-        print(f"{file_storage} is not mounted. Exiting.")
-        sys.exit(1)
+    os.remove(size_list_file)
 
     # Download the filtered files to tmp_dir
     command_cp = f"s5cmd run {cp_file_name}"
     subprocess.run(SHELL_PREFIX + command_cp, shell=True)
-    # os.remove(cp_file_name)
+    os.remove(cp_file_name)
 
     return biopj_info_dict
 
@@ -265,9 +277,6 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
     """
     num_md_rows = metadata_df.shape[0]
     group_name = group_df['group'].iloc[0]
-    # add rpm column to group_df
-    group_df['rpm'] = group_df.apply(
-        lambda row: row['quantifier'] / row['spots'] * NORMALIZING_CONST if row['spots'] != 0 else 0, axis=1)
     metadata_counts = {}
 
     for col in metadata_df.columns:
@@ -314,8 +323,12 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
             num_true = len(biosamples)
             num_false = num_md_rows - num_true
             # get the rpm values for the target and remainng biosamples
-            true_rpm = group_df[group_df['biosample_id'].isin(biosamples)]['rpm']
-            false_rpm = group_df[~group_df['biosample_id'].isin(biosamples)]['rpm']
+            biosample_ids = np.array(group_df['bio_sample'].tolist())
+            rpm = np.array([row['quantifier'] / row['spots'] * NORMALIZING_CONST if row['spots'] != 0 else 0 for _, row in group_df.iterrows()])
+
+            mask = np.isin(biosample_ids, biosamples)
+            true_rpm = rpm[mask]
+            false_rpm = rpm[~mask]
         except Exception as e:
             print(f'Error getting rpm values for {group_name} - {target_col}: {e}')
             continue
@@ -379,7 +392,8 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
         return None
 
     # get subset of main_df that belongs to this bioproject
-    subset_df = main_df[main_df['bio_project'] == bioproject.name] & main_df['biosample'].isin(bioproject.metadata_df['biosample'])
+    subset_df = main_df[main_df['bio_project'] == bioproject.name]
+    subset_df = subset_df[subset_df['bio_sample'].isin(bioproject.metadata_df['biosample_id'])]
 
     # group processing
     group_to_df_map = {group: subset_df[subset_df['group'] == group] for group in subset_df['group'].unique()}
@@ -398,10 +412,10 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     return pd.concat(group_output_dfs)
 
 
-def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], file_storage) -> None:
+def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: MountTmpfs) -> None:
     """Run MWAS on the given data file
     input_info is a tuple of the group and quantifier column names
-    file_storage will usually be the tmpfs mount point (mount_tmpfs.mount_point)
+    storage will usually be the tmpfs mount point mount_tmpfs
     """
     # ================
     # PRE-PROCESSING
@@ -445,7 +459,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], file_stora
             biopj_block = bioprojects_list[i * BLOCK_SIZE: (i + 1) * BLOCK_SIZE]
 
         # GET METADATA FOR BIOPROJECTS IN THIS BLOCK
-        biopj_info_dict = metadata_retrieval(biopj_block, file_storage)
+        biopj_info_dict = metadata_retrieval(biopj_block, storage)
 
         if not SCHEDULING:
             random.shuffle(biopj_block)
@@ -509,9 +523,14 @@ if __name__ == '__main__':
         # MOUNT TMPFS
         mount_tmpfs = MountTmpfs()
         mount_tmpfs.mount()
+        if not mount_tmpfs.is_mounted:
+            print("Did not mount tmpfs, likely because this is a Windows system. Using working directory instead.")
+        # CREATE OUTPUT DIRECTORY
+        if not os.path.exists(OUTPUT_DIR_DISK):
+            os.mkdir(OUTPUT_DIR_DISK)
 
         # RUN MWAS
-        run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs.mount_point)
+        run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs)
 
         # UNMOUNT TMPFS
         mount_tmpfs.unmount()
