@@ -35,8 +35,8 @@ S3_METADATA_DIR = 's3://serratus-biosamples/mwas_setup/bioprojects'
 # S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
 OS = platform.system()
 SHELL_PREFIX = 'wsl ' if OS == 'Windows' else ''
-DEFAULT_MOUNT_POINT = '/tmp'
-TMPFS_DIR = '/mnt/tmpfs' # '/mnt/tmpfs'
+DEFAULT_MOUNT_POINT = '/mnt/mwas'
+TMPFS_DIR = '/mnt/tmpfs'
 SYSTEM_MOUNTS = 'wmic logicaldisk get name' if OS == 'Windows' else 'mount'
 
 # processing constants
@@ -161,24 +161,22 @@ class MountTmpfs:
     def mount(self) -> None:
         """Mounts the tmpfs filesystem"""
         if not self.is_tmpfs_mounted():
-            print(f"{self.mount_point} was not mounted as tmpfs (RAM), will now use {TMPFS_DIR}")
-            self.mount_point = TMPFS_DIR
-            os.makedirs(self.mount_point, exist_ok=True)
-            if self.alloc_space is None:
-                subprocess.run(
-                    f"sudo mount -t tmpfs tmpfs {self.mount_point}", shell=True)
-            else:
-                subprocess.run(
-                    f"sudo mount -t tmpfs -o size={self.alloc_space} tmpfs {self.mount_point}", shell=True)
+            print(f"{self.mount_point} was not mounted as tmpfs (RAM), so mounting it now.")
+            # os.makedirs(self.mount_point, exist_ok=True)
+            alloc_space = f"-o size={self.alloc_space}" if self.alloc_space else ""
+            subprocess.run(
+                f"sudo mount {alloc_space} -t tmpfs {self.mount_point.split()[-1]} {self.mount_point}",
+                shell=True
+            )
         else:
-            print(f"{self.mount_point} is already mounted as tmpfs")
+            print(f"{self.mount_point} is already mounted as type tmpfs")
 
         self.is_mounted = True
 
     def unmount(self) -> None:
         """Unmounts the tmpfs filesystem"""
         if self.is_tmpfs_mounted():
-            subprocess.run(f"sudo umount {self.mount_point}", shell=True)
+            subprocess.run(f"sudo umount -f {self.mount_point}", shell=True)
             self.is_mounted = False
             print(f"{self.mount_point} was unmounted")
         else:
