@@ -2,28 +2,20 @@
 """
 # built-in libraries
 import os
+import sys
+import subprocess
 import pickle
 import warnings
 # import logging
-import sys
+import random
 
 # import required libraries
+import psycopg2
 import pandas as pd
-import random
 import numpy as np
 import scipy.stats as stats
-import psycopg2
 
-OUTPUT_DIR_DISK = 'temp/outputs'
-PICKLE_DIR = 'temp/pickles'
-
-MAP_UNKNOWN = 0  # maybe np.nan
-BLOCK_SIZE = 1000
-NORMALIZING_CONST = 1000000
-SCHEDULING = False
-BLACKLIST = []  # list of bioprojects that are too large
-OUT_COLS = ['status', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
-            'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
+# sql constants
 CONNECTION_INFO = {
     'host': 'serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com',
     'database': 'summary',
@@ -35,6 +27,26 @@ query = """
     FROM %s -- srarun
     WHERE run in (%s)
 """
+
+# path constants
+OUTPUT_DIR_DISK = 'tmp/outputs'
+S3_METADATA_DIR = 's3://serratus-biosamples/mwas_setup/bioprojects'
+# S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
+
+# processing constants
+BLOCK_SIZE = 1000
+MAX_PROJECT_SIZE = 50 * 1024 ** 2  # 50 MB
+PICKLE_SPACE_LIMIT = 2 * 1024 ** 3  # 2 GB
+SCHEDULING = False
+
+# special constants
+BLACKLIST = set() # list of bioprojects that are too large
+
+# stats constants
+MAP_UNKNOWN = 0  # maybe np.nan
+NORMALIZING_CONST = 1000000  # 1 million
+OUT_COLS = ['status', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
+            'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
 
 
 class BioProjectInfo:
@@ -101,93 +113,102 @@ def get_bioprojects_df(runs: list) -> pd.DataFrame | None:
             return None
 
 
-def metadata_retrieval(biopj_block: list[str]) -> dict[str, BioProjectInfo]:
-    """Retrieve metadata for the given bioprojects, and organize them in a dictionary
+class MountTmpfs:
+    """A mounted tmpfs filesystem referencer
     """
-    # TODO: a constant for the blacklist of projects that are too large (manually calculate this beforehand)
-    # make a single s5cmd call to download all the metadata files in one request (they should get loaded to mnt)
-    import subprocess
-    import os
+    DEFAULT_MOUNT_POINT = '/tmp'
+    TMPFS_DIR = '/mnt/tmpfs'
+    SYSTEM_MOUNTS = '/proc/mounts'
 
-    def is_tmpfs_mounted(mount_point):
-        with open('/proc/mounts', 'r') as f:
+    def __init__(self, mount_point: str = DEFAULT_MOUNT_POINT, alloc_space: int = None) -> None:
+        self.mount_point = mount_point
+        self.alloc_space = alloc_space  # if None, then it's a dynamic mount
+        self.space_used = 0  # bytes of actual space currently in use
+        self.is_mounted = False
+
+    def is_tmpfs_mounted(self) -> bool:
+        """checks if the given mount point is mounted as tmpfs"""
+        with open(self.SYSTEM_MOUNTS, 'r') as f:
             mounts = f.readlines()
         for mount in mounts:
             parts = mount.split()
-            if parts[1] == mount_point and parts[2] == 'tmpfs':
+            if parts[1] == self.mount_point and parts[2] == 'tmpfs':
                 return True
         return False
 
-    # Configuration
-    s3_bucket = 's3://serratus-biosamples/mwas_setup/'
-    file_prefix = 'your/prefix/'  # Change as needed
-    max_file_size = 50 * 1024 * 1024  # Maximum file size in bytes (e.g., 50 MB)
-    tmpfs_dir = '/mnt/tmpfs'
-    file_list = biopj_block
+    def mount(self) -> None:
+        """Mounts the tmpfs filesystem"""
+        if not self.is_tmpfs_mounted():
+            print(f"{self.mount_point} was not mounted as tmpfs (RAM), will now use {self.TMPFS_DIR}")
+            self.mount_point = self.TMPFS_DIR
+            os.makedirs(self.mount_point, exist_ok=True)
+            if self.alloc_space is None:
+                subprocess.run(
+                    f"sudo mount -t tmpfs tmpfs {self.mount_point}", shell=True)
+            else:
+                subprocess.run(
+                    f"sudo mount -t tmpfs -o size={self.alloc_space} tmpfs {self.mount_point}", shell=True)
+        else:
+            print(f"{self.mount_point} is already mounted as tmpfs")
 
-    # Check if /tmp is mounted as tmpfs, otherwise use /mnt/tmpfs
-    if is_tmpfs_mounted('/tmp'):
-        tmp_dir = '/tmp'
-        print("/tmp is mounted as tmpfs (RAM)")
-    else:
-        tmp_dir = tmpfs_dir
-        print("/tmp is not mounted as tmpfs (RAM), using /mnt/tmpfs")
-        os.makedirs(tmpfs_dir, exist_ok=True)
-        # Mount tmpfs without specifying size
-        subprocess.run(f"sudo mount -t tmpfs tmpfs {tmpfs_dir}", shell=True)
+        self.is_mounted = True
 
-    # Step 1: Create a file with the list of files to check
+    def unmount(self) -> None:
+        """Unmounts the tmpfs filesystem"""
+        if self.is_tmpfs_mounted():
+            subprocess.run(f"sudo umount {self.mount_point}", shell=True)
+            self.is_mounted = False
+            print(f"{self.mount_point} was unmounted")
+        else:
+            print(f"{self.mount_point} is not mounted as tmpfs")
+
+
+def metadata_retrieval(biopj_block: list[str], file_storage: str) -> dict[str, BioProjectInfo]:
+    """Retrieve metadata for the given bioprojects, and organize them in a dictionary
+    file_storage will usually be the tmpfs mount point (mount_tmpfs.mount_point)
+    """
+    # TODO: a constant for the blacklist of projects that are too large (manually calculate this beforehand)
+    # make a single s5cmd call to download all the metadata files in one request (they should get loaded to mnt)
+
+    # Create a file with the list of files to check (although this takes an extra loop, s5cmd makes it worth it)
     with open('file_list_to_check.txt', 'w') as f:
-        for file_name in file_list:
-            f.write(f"{s3_bucket}/{file_prefix}{file_name}\n")
+        # writing a bucket path for each line in our file list file. A file format is needed for s5cmd
+        for biopj in biopj_block:
+            f.write(f"{S3_METADATA_DIR}/{biopj}\n")
 
-    # Step 2: List files with sizes using s5cmd
-    command_list = f"s5cmd ls --include-from file_list_to_check.txt > file_list_with_sizes.txt"
+    # List files with sizes using s5cmd (remember, this only looks through a single block of bioprojects)
+    command_list = "s5cmd ls --include-from file_list_to_check.txt > file_list_with_sizes.txt"
     subprocess.run(command_list, shell=True)
+    os.remove('file_list_to_check.txt')  # useless now that we have the file_list_with_sizes.txt
 
-    # Step 3: Parse the result and filter files by size
-    files_to_download = []
+    # filter files by size, and also set create each BioProjectInfo object and load them into a dictionary
     biopj_info_dict = {}
-    with open('file_list_with_sizes.txt', 'r') as f:
-        for line in f:
+    total_size = 0
+    with open('file_list_with_sizes.txt', 'r') as read_file, open('files_to_download.txt', 'w') as write_file:
+        for line in read_file:
             parts = line.split()
+            # remember, we're reading from a ls output file
             size = int(parts[0])
             file_path = parts[-1]
 
-            if size <= max_file_size:
-                files_to_download.append(file_path)
-                biopj_info_dict[file_path] = BioProjectInfo(
-                    file_path, os.path.join(tmp_dir, os.path.basename(file_path)), size)
+            biopj_name = file_path.split('/')[-1]
+            if size <= MAX_PROJECT_SIZE and biopj_name not in BLACKLIST:
+                write_file.write(f"{file_path}\n")
+                system_file_path = os.path.join(file_storage, os.path.basename(file_path))
+                biopj_info_dict[biopj_name] = BioProjectInfo(biopj_name, system_file_path, size)
+                total_size += size
             else:
-                print(f"Skipping {file_path} because it is too large")
+                print(f"Skipping {biopj_name} because it is too large")
+            if total_size >= PICKLE_SPACE_LIMIT:
+                print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
+                break
 
-    # Write the filtered file paths to a text file
-    with open('files_to_download.txt', 'w') as f:
-        for file_path in files_to_download:
-            f.write(f"{file_path}\n")
-
-    # Step 4: Download the filtered files to tmp_dir
-    command_cp = f"s5cmd cp -f --include-from files_to_download.txt {tmp_dir}/"
-    subprocess.run(command_cp, shell=True)
-
-    # Clean up downloaded files as they're processed
-    for file_path in files_to_download:
-        local_file_path = os.path.join(tmp_dir, os.path.basename(file_path))
-        # Process the file (example: load the pickle file and do something)
-        # with open(local_file_path, 'rb') as f:
-        #     data = pickle.load(f)
-        #     # Process the data
-        # Remove the file after processing
-        os.remove(local_file_path)
-
-    # Clean up
-    os.remove('file_list_to_check.txt')
     os.remove('file_list_with_sizes.txt')
-    os.remove('files_to_download.txt')
 
-    # Unmount tmpfs if it was mounted
-    if tmp_dir == tmpfs_dir:
-        subprocess.run(f"sudo umount {tmpfs_dir}", shell=True)
+    # Download the filtered files to tmp_dir
+    command_cp = f"s5cmd cp -f --include-from files_to_download.txt {file_storage}/"
+    subprocess.run(command_cp, shell=True)
+    os.remove('files_to_download.txt')
 
     return biopj_info_dict
 
@@ -196,7 +217,6 @@ def get_log_fold_change(true, false):
     """calculate the log fold change of true with respect to false
         if true and false is 0, then return 0
     """
-
     if true == 0 and false == 0:
         return 0
     elif true == 0:
@@ -350,8 +370,10 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     return pd.concat(group_output_dfs)
 
 
-def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str]) -> None:
+def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], file_storage) -> None:
     """Run MWAS on the given data file
+    input_info is a tuple of the group and quantifier column names
+    file_storage will usually be the tmpfs mount point (mount_tmpfs.mount_point)
     """
     # ================
     # PRE-PROCESSING
@@ -395,7 +417,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str]) -> None:
             biopj_block = bioprojects_list[i * BLOCK_SIZE: (i + 1) * BLOCK_SIZE]
 
         # GET METADATA FOR BIOPROJECTS IN THIS BLOCK
-        biopj_info_dict = metadata_retrieval(biopj_block)
+        biopj_info_dict = metadata_retrieval(biopj_block, file_storage)
 
         if not SCHEDULING:
             random.shuffle(biopj_block)
@@ -425,7 +447,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str]) -> None:
 
 
 if __name__ == '__main__':
-    warnings.filterwarnings('ignore')  # FIX THIS LATER
+    # warnings.filterwarnings('ignore')  # FIX THIS LATER
 
     # Check if the correct number of arguments is provided
     arg1 = sys.argv[1]
@@ -453,7 +475,16 @@ if __name__ == '__main__':
             print("File not found")
             sys.exit(1)
 
-        run_on_file(input_df, (group_by, quantifying_by))
+        # MOUNT TMPFS
+        mount_tmpfs = MountTmpfs()
+        mount_tmpfs.mount()
+
+        # RUN MWAS
+        run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs.mount_point)
+
+        # UNMOUNT TMPFS
+        mount_tmpfs.unmount()
+        sys.exit(0)
     else:
         print("Invalid arguments")
         sys.exit(1)
