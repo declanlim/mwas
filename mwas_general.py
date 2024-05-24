@@ -123,6 +123,7 @@ def get_bioprojects_df(runs: list) -> pd.DataFrame | None:
 class MountTmpfs:
     """A mounted tmpfs filesystem referencer
     """
+
     def __init__(self, mount_point: str = DEFAULT_MOUNT_POINT, alloc_space: int = None) -> None:
         self.mount_point = mount_point
         self.alloc_space = alloc_space  # if None, then it's a dynamic mount
@@ -324,7 +325,9 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
             num_false = num_md_rows - num_true
             # get the rpm values for the target and remainng biosamples
             biosample_ids = np.array(group_df['bio_sample'].tolist())
-            rpm = np.array([row['quantifier'] / row['spots'] * NORMALIZING_CONST if row['spots'] != 0 else 0 for _, row in group_df.iterrows()])
+
+            rpm = group_df.apply(
+                lambda row: row['quantifier'] / row['spots'] * NORMALIZING_CONST if row['spots'] != 0 else 0, axis=1)
 
             mask = np.isin(biosample_ids, biosamples)
             true_rpm = rpm[mask]
@@ -433,7 +436,8 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     if main_df is None:
         return
     # merge the main_df with the input_df (must assume both have run column)
-    main_df = main_df.merge(data_file, on='run', how='inner')  # TODO: account for missing samples in user input - fill in with MAP_UNKNOWN
+    main_df = main_df.merge(data_file, on='run', how='outer')
+    main_df.fillna(MAP_UNKNOWN, inplace=True)
     del data_file, runs
     main_df.groupby('bio_project')
 
@@ -444,6 +448,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
 
     # BLOCK INFO PREPARATION
     bioprojects_list = main_df['bio_project'].unique()
+    random.shuffle(bioprojects_list)
     num_bioprojects = len(bioprojects_list)
     num_blocks = max(1, num_bioprojects // BLOCK_SIZE)
 
@@ -451,26 +456,37 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # PROCESSING
     # ================
 
-    for i in range(0, num_blocks):  # for each block in bioprojects
+    i = 0
+    while i < num_bioprojects:  # for each block (roughly) in bioprojects
         # GET LIST OF BIOPROJECTS IN THIS CURRENT BLOCK
-        if (i + 1) * BLOCK_SIZE > num_bioprojects:
-            biopj_block = bioprojects_list[i * BLOCK_SIZE:]
+        if i + BLOCK_SIZE > num_bioprojects:  # currently inside a non-full block
+            biopj_block = bioprojects_list[i:]
         else:
-            biopj_block = bioprojects_list[i * BLOCK_SIZE: (i + 1) * BLOCK_SIZE]
+            biopj_block = bioprojects_list[i: i + BLOCK_SIZE]
 
         # GET METADATA FOR BIOPROJECTS IN THIS BLOCK
         biopj_info_dict = metadata_retrieval(biopj_block, storage)
+        if len(biopj_info_dict) < BLOCK_SIZE:
+            # handling since we reached the space limit before downloading a full blocks worth of bioprojects
+            i += len(biopj_info_dict)
+        else:
+            i += BLOCK_SIZE  # move to the next block
+
+        del biopj_block
 
         if not SCHEDULING:
-            random.shuffle(biopj_block)
+            # random.shuffle(biopj_block) is this even necessary since it's iterating over a dict?
             # PROCESS THE BLOCK
             for biopj in biopj_info_dict.keys():
                 output_file = process_bioproject(biopj_info_dict[biopj], main_df)
 
-                if output_file is not None:
+                # OUTPUT FILE (FOR THIS PARTICULAR BIOPROJECT)
+                if output_file is not None and output_file.shape[0] > 1:
                     # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
                     with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
-                        output_file.to_csv(f)
+                        output_file.to_csv(f, index=False)
+                elif output_file is not None and output_file.shape[0] == 1:
+                    print(f"Output file for {biopj} is empty. Not creating a file for it.")
                 else:
                     print(f"There was a problem with making an output file for {biopj}")
 
@@ -484,7 +500,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
         # and then append-write to output file in the folder <hash_code> (create the output file if it doesn't exist yet)
 
         # FREE UP EVERY ROW IN THE MAIN DATAFRAME THAT BELONGS TO THE CURRENT BLOCK BY INDEXING VIA BIOPROJECT
-        main_df = main_df[~main_df['bio_project'].isin(biopj_block)]
+        main_df = main_df[~main_df['bio_project'].isin(biopj_info_dict.keys())]
 
     # ================
     # POST-PROCESSING
