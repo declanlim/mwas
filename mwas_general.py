@@ -8,7 +8,10 @@ import subprocess
 import pickle
 # import warnings
 # import logging
-import random
+from random import shuffle
+from atexit import register
+from shutil import rmtree
+from typing import Any
 
 # import required libraries
 import psycopg2
@@ -52,7 +55,7 @@ BLACKLIST = set()  # list of bioprojects that are too large
 # stats constants
 MAP_UNKNOWN = 0  # maybe np.nan
 NORMALIZING_CONST = 1000000  # 1 million
-OUT_COLS = ['status', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
+OUT_COLS = ['bioproject', 'group', 'status', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
             'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
 
 
@@ -95,6 +98,7 @@ class BioProjectInfo:
         self.metadata_df = None
         if os.path.exists(self.metadata_path):
             os.remove(self.metadata_path)
+            print(f"Deleted metadata pickle file {self.name}.pickle")
         self.metadata_path = None
 
 
@@ -278,33 +282,32 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
     """
     num_md_rows = metadata_df.shape[0]
     group_name = group_df['group'].iloc[0]
-    metadata_counts = {}
+    bioproject_name = group_df['bio_project'].iloc[0]
+    biosamples_lst = metadata_df['biosample_id'].unique()
 
-    for col in metadata_df.columns:
-        if col == 'biosample_id':
-            continue
-        counts = metadata_df[col].value_counts()
-        n = len(counts)
-        # skip if there is only one unique value or if all values are unique
-        if n == 1 or n == num_md_rows:
-            continue
-        metadata_counts[col] = counts
-
-    existing_samples = list()
     target_col_runs = {}
+    existing_samples = list()  # list of biosamples lists that have already been stored. Used in tandem with target_col_runs to speed up checking if the same biosamples are already stored in target_col_runs
 
     # iterate through the values for all columns that can be tested
-    for target_col, value_counts in metadata_counts.items():
+    for target_col in metadata_df.columns:
+
+        # skip if the column is biosample_id or if not enough unique values
+        if target_col == 'biosample_id':
+            continue
+        value_counts = metadata_df[target_col].value_counts()
+        if len(value_counts) == 1 or len(value_counts) == num_md_rows:
+            continue
+
         for target_term, count in value_counts.items():
             # skip if there is only one value
             if count == 1:
                 continue
 
-            # get the biosamples that correspond to the target term
+            # get the biosamples that correspond to the target term (e.g. will be a list of 2 biosamples from the metadata file, if the target term is '2021-09-01T00:53:47.397' in the current target col of 'when')
             target_term_biosamples = list(metadata_df[metadata_df[target_col] == target_term]['biosample_id'])
 
             # check if the same biosamples are already stored and aggregate the columns
-            target_col_name = f'{target_col}\t{target_term}'
+            target_col_name = f'{target_col}\t{target_term}'  # e.g. will be 'when\t2021-09-01T00:53:47.397'
 
             if target_term_biosamples in existing_samples:
                 existing_key = list(target_col_runs.keys())[list(target_col_runs.values()).index(target_term_biosamples)]
@@ -318,18 +321,27 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
     # RUN TTESTS
     output_dict = {col: [] for col in OUT_COLS}
     status = 0
+    rpm = np.array([])  # getting rpm, which is all we need from out group_df
+    for biosample in biosamples_lst:
+        # get the row for the biosample
+        row = group_df[group_df['bio_sample'] == biosample]
+        if row.empty:
+            rpm = np.append(rpm, 0)
+        else:
+            rpm = np.append(rpm,
+                            row['quantifier'].values[0] / row['spots'].values[0] * NORMALIZING_CONST if row['spots'].values[0] != 0 else 0)
 
-    for target_col, biosamples in target_col_runs.items():
+    # recall target_col_runs is a dict of target_col_name: biosamples e.g. {'when\t2021-09-01T00:53:47.397': ['SAMN00000001', 'SAMN00000002'], ...}
+    for target_col, biosamples_in_set in target_col_runs.items():
         try:
-            num_true = len(biosamples)
+            num_true = len(biosamples_in_set)
+            if num_true < 2:
+                continue
             num_false = num_md_rows - num_true
             # get the rpm values for the target and remainng biosamples
-            biosample_ids = np.array(group_df['bio_sample'].tolist())
 
-            rpm = group_df.apply(
-                lambda row: row['quantifier'] / row['spots'] * NORMALIZING_CONST if row['spots'] != 0 else 0, axis=1)
-
-            mask = np.isin(biosample_ids, biosamples)
+            # TODO - improve this part
+            mask = np.isin(biosamples_lst, biosamples_in_set)
             true_rpm = rpm[mask]
             false_rpm = rpm[~mask]
         except Exception as e:
@@ -353,6 +365,7 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
         # if there are at least 4 values in each group, run a permutation test
         # otherwise run a t test
         try:
+            print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {target_col}")
             if min(num_false, num_true) < 4:
                 # scipy t test
                 test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
@@ -374,24 +387,28 @@ def process_group(metadata_df: pd.DataFrame, group_df: pd.DataFrame) -> pd.DataF
         metadata_value = '\t'.join(pair.split('\t')[1] for pair in metadata_tmp)
 
         # add values to output dict
-        output_cols = (status, metadata_field, metadata_value, num_true, num_false, mean_rpm_true, mean_rpm_false,
+        output_cols = (bioproject_name, group_name, status, metadata_field, metadata_value, num_true, num_false, mean_rpm_true, mean_rpm_false,
                        sd_rpm_true, sd_rpm_false, fold_change, test_statistic, p_value)
         for i, col in enumerate(OUT_COLS):
             output_dict[col].append(output_cols[i])
 
     # create output dataframe
-    output_df = pd.DataFrame(output_dict)
-    output_df.sort_values(by='p_value')
-    return output_df
+    if output_dict:
+        output_df = pd.DataFrame(output_dict)
+        output_df.sort_values(by='p_value')
+        return output_df
+    return None
 
 
 def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.DataFrame | None:
     """Process the given bioproject, and return an output file - concatenation of several group outputs
     """
+    print(f"Processing {bioproject.name}...")
     bioproject.load_metadata()  # access this df as bioproject.metadata_df
 
     if bioproject.metadata_df is None or bioproject.metadata_row_count <= 2:
         print(f"Skipping {bioproject.name} since its metadata is empty or too small")
+        bioproject.delete_metadata()
         return None
 
     # get subset of main_df that belongs to this bioproject
@@ -403,7 +420,8 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     group_output_dfs = []
     for group in group_to_df_map:
         output_file = process_group(bioproject.metadata_df, group_to_df_map[group])
-        group_output_dfs.append(output_file)
+        if output_file is None or output_file.shape[0] > 0:
+            group_output_dfs.append(output_file)
 
     bioproject.delete_metadata()
 
@@ -412,7 +430,10 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     # main_df.drop(subset_df.index)
 
     # concatenate all the group output files into one
-    return pd.concat(group_output_dfs)
+    if group_output_dfs:
+        return pd.concat(group_output_dfs)
+    else:
+        return None
 
 
 def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: MountTmpfs) -> None:
@@ -448,7 +469,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
 
     # BLOCK INFO PREPARATION
     bioprojects_list = main_df['bio_project'].unique()
-    random.shuffle(bioprojects_list)
+    shuffle(bioprojects_list)
     num_bioprojects = len(bioprojects_list)
     num_blocks = max(1, num_bioprojects // BLOCK_SIZE)
 
@@ -478,13 +499,21 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
             # random.shuffle(biopj_block) is this even necessary since it's iterating over a dict?
             # PROCESS THE BLOCK
             for biopj in biopj_info_dict.keys():
-                output_file = process_bioproject(biopj_info_dict[biopj], main_df)
+                try:
+                    output_file = process_bioproject(biopj_info_dict[biopj], main_df)
+                except Exception as e:
+                    print(f"Error processing bioproject {biopj}: {e}")
+                    biopj_info_dict[biopj].delete_metadata()
+                    continue
 
                 # OUTPUT FILE (FOR THIS PARTICULAR BIOPROJECT)
                 if output_file is not None and output_file.shape[0] > 1:
-                    # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
-                    with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
-                        output_file.to_csv(f, index=False)
+                    try:
+                        # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
+                        with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
+                            output_file.to_csv(f, index=False)
+                    except Exception as e:
+                        print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
                 elif output_file is not None and output_file.shape[0] == 1:
                     print(f"Output file for {biopj} is empty. Not creating a file for it.")
                 else:
@@ -507,11 +536,22 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # ================
 
 
+def cleanup(mount_tmpfs: MountTmpfs) -> Any:
+    """Clear out all files in the pickles directory
+    """
+    if os.path.exists(PICKLE_DIR):
+        rmtree(PICKLE_DIR)
+        print(f"Cleared out all files in {PICKLE_DIR}")
+    if platform.system() == 'Linux':
+        mount_tmpfs.unmount()
+
+
 if __name__ == '__main__':
     # warnings.filterwarnings('ignore')  # FIX THIS LATER
+    num_args = len(sys.argv)
 
     # Check if the correct number of arguments is provided
-    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+    if num_args < 2 or sys.argv[1] in ('-h', '--help'):
         print("Usage: python mwas_general.py data_file.csv")
         sys.exit(1)
     elif sys.argv[1].endswith('.csv'):
@@ -545,8 +585,12 @@ if __name__ == '__main__':
         if not os.path.exists(OUTPUT_DIR_DISK):
             os.mkdir(OUTPUT_DIR_DISK)
 
+        register(cleanup, mount_tmpfs)
+
         # RUN MWAS
         run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs)
+
+        print("MWAS completed successfully")
 
         # UNMOUNT TMPFS
         mount_tmpfs.unmount()
