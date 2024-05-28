@@ -34,7 +34,7 @@ query = """
 
 # system & path constants
 PICKLE_DIR = 'pickles'  # will be relative to working directory
-OUTPUT_DIR_DISK = 'outputs'
+OUTPUT_DIR_DISK = '../outputs'
 S3_METADATA_DIR = 's3://serratus-biosamples/mwas_setup/bioprojects'
 # S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
 OS = platform.system()
