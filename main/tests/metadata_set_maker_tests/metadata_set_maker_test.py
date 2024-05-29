@@ -25,13 +25,15 @@ class TestMetadataSetMaker(unittest.TestCase):
         self.metadata_set_maker_test_setup(self.metadata_files[3])
 
     def metadata_set_maker_test_setup(self, metadata_file):
+        """tests metadata_set_maker.py by comparing output to original metdata dataframe
+        """
         metadata_dataframe = pd.read_csv(metadata_file)
         start_time = time.time()
         biosamples_ref, set_df = metadata_to_set_accession(metadata_dataframe.copy())
         end_time = time.time()
         print(f'Time taken: {end_time - start_time} seconds')
 
-        file = f'{metadata_file[:-4]}_output.csv'
+        file = f'test_outputs/{metadata_file[:-4]}_output.csv'
         if os.path.exists(file):
             os.remove(file)
         set_df.to_csv(file, index=False)
@@ -109,7 +111,7 @@ class TestMetadataSetMaker(unittest.TestCase):
             else:
                 set_val = reconstructed_df[reconstructed_df['biosample_id'] == biosample][col].values[0]
                 if set_val != value:
-                    # try replacing the ; with ,:
-                    if set_val != value.replace(';', ',:'):
+                    # try replacing the ; with :
+                    if set_val != value.replace(';', ':'):
                         return False
         return True

@@ -19,7 +19,7 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
     new_df_builder = {}  # {biosample_vector: (attributes, values)} where attributes and values are in form "str; str; ..."
 
     for col in metadata_df.columns:
-        col = col.replace(';', ',:')  # to avoid confusion with the delimiter
+        col = col.replace(';', ':')  # to avoid confusion with the delimiter
         num_uniques = metadata_df[col].nunique()
         if col == 'biosample_id':
             continue
@@ -87,21 +87,3 @@ if __name__ == '__main__':
     if os.path.exists('tests/TEST--PRJEB37099_SETS.csv'):
         os.remove('tests/TEST--PRJEB37099_SETS.csv')
     set_df.to_csv('../csvs/TEST--PRJEB37099_SETS.csv', index=False)
-
-# biosample_include_index_list, biosample_exclude_index_list = [], []
-# for _, row in metadata_df.iterrows():
-#     biosample = row['biosample_id']
-#     if row[col] == factor:
-#         biosample_include_index_list.append(biosample)
-#     else:
-#         biosample_exclude_index_list.append(biosample)
-# include_len, exclude_len = len(biosample_include_index_list), len(biosample_exclude_index_list)
-# if include_len == 1 or exclude_len == 1:
-#     continue
-# if include_len < exclude_len:  # we want to use whichever is smaller - so if include is smaller, include = True
-#     biosample_index_list = biosample_include_index_list
-#     include = True
-# else:
-#     biosample_index_list = biosample_exclude_index_list
-#     include = False
-# biosample_code = str(biosample_index_list)

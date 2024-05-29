@@ -4,6 +4,7 @@ wip_files/
 main/outputs
 main/pickles
 main/tests/metadata_set_maker_tests/test_outputs/*.csv
+main/tests/metadata_set_maker_tests/__pycache__/
 main/tests/__pycache__/
 main/__pycache__/
 main/csvs/*.csv
