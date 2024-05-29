@@ -30,7 +30,7 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
             factors = metadata_df[col].cat.categories
 
             for factor in factors:
-                if factor == 'nan':
+                if pd.isna(factor) or factor == 'nan':
                     continue
                 elif isinstance(factor, str):
                     factor = factor.replace(';', ',:')  # to avoid confusion with the delimiter
@@ -77,15 +77,15 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
 
 
 if __name__ == '__main__':
-    metadata_file = '../csvs/TEST--PRJEB37099.csv'
+    metadata_file = 'tests/metadata_set_maker_tests/TEST--PRJEB37099.csv'
     metadata_dataframe = pd.read_csv(metadata_file)
     start_time = time.time()
     biosamples_ref, set_df = metadata_to_set_accession(metadata_dataframe)
     end_time = time.time()
     print(f'Time taken: {end_time - start_time} seconds')
     # convert to csv store in csvs
-    if os.path.exists('../csvs/TEST--PRJEB37099_SETS.csv'):
-        os.remove('../csvs/TEST--PRJEB37099_SETS.csv')
+    if os.path.exists('tests/TEST--PRJEB37099_SETS.csv'):
+        os.remove('tests/TEST--PRJEB37099_SETS.csv')
     set_df.to_csv('../csvs/TEST--PRJEB37099_SETS.csv', index=False)
 
 # biosample_include_index_list, biosample_exclude_index_list = [], []

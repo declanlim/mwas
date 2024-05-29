@@ -1,6 +1,9 @@
 logs/
 queries/
-wip_files
-csvs
-outputs
-pickles
+wip_files/
+main/outputs
+main/pickles
+main/tests/metadata_set_maker_tests/test_outputs/*.csv
+main/tests/__pycache__/
+main/__pycache__/
+main/csvs/*.csv
