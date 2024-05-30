@@ -20,6 +20,5 @@ with open(pickle_files, 'r') as file_list, open('csv_files.txt', 'w') as csv_fil
                 exit(1)
             bioproject_name = str(pickle_file).split('/')[-1].split('.')[0]
             bioproj_df.to_csv(f'{sys.argv[2]}/{bioproject_name}.csv', index=False)
-            csv_files.write(f'{sys.argv[2]}/{bioproject_name}.csv' +
-                            f'{" " + str(pickle_size) if pickle_size is not None else ""}\n')
+            csv_files.write(f'{sys.argv[2]}/{bioproject_name}.csv{" " + str(pickle_size) if pickle_size is not None else ""}\n')
 print("loaded bioproject csvs")

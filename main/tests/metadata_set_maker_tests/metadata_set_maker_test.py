@@ -177,8 +177,7 @@ if __name__ == '__main__':
                         total_creation_time += creation_time_
 
                         bioproject = test_file.split('/')[-1][:-4]
-                        results_f.write(f"{bioproject},{pickle_size if pickle_size is not None else 'missing'},"
-                                        f"{output_size_},{creation_time_},{test_time},{status_}\n")
+                        results_f.write(f"{bioproject},{pickle_size if pickle_size is not None else 'missing'},{output_size_},{creation_time_},{test_time},{status_}\n")
                 if failed > 0:
                     print(f"Failed {failed} bioprojects out of {failed + passed} bioprojects")
                 else:
