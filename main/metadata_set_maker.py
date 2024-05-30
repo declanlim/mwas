@@ -6,7 +6,7 @@ import os
 
 
 def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.DataFrame]:
-    """takes a metadata dataframe fro a bioproject (accessed by biosample_id)
+    """takes a metadata dataframe from a bioproject (accessed by biosample_id)
         and returns a list of biosample accessions and a dataframe where there are 3 columns:
         attribute(s), value(s) (an attribute(s) + value(s) pair makes a distinct set), and biosample_id,
         but biosample_id entries are a list of indexes which refer to which biosamples have that attribute(s) + value(s) pair.
@@ -32,8 +32,6 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
             for factor in factors:
                 if pd.isna(factor) or factor == 'nan':
                     continue
-                elif isinstance(factor, str):
-                    factor = factor.replace(';', ',:')  # to avoid confusion with the delimiter
 
                 biosample_vector_series = pd.Series(metadata_df[col] == factor)
                 vector_len = sum(biosample_vector_series)
@@ -42,6 +40,9 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
                 include = vector_len < n / 2  # to save space, if most are true, we'll store all the false indexes, otherwise we'll store all the true indexes
                 # note, use biosample_index_list in the final new_df, since biosample_vector can be too large an integer for pandas
                 # biosample_code is for key value in new_df_builder (remember, you can't use a list as a key in a dictionary)
+
+                if isinstance(factor, str):
+                    factor = factor.replace(';', ':')  # to avoid confusion with the delimiter
 
                 try:
                     biosample_index_list = [i for i, x in enumerate(biosample_vector_series) if (x if include else not x)]

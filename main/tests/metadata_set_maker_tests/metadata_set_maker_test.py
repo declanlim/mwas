@@ -1,5 +1,7 @@
 """tests metadata_set_maker.py by comparing output to original metdata dataframe"""
 import time
+import traceback
+
 import pandas as pd
 import os
 import sys
@@ -11,23 +13,23 @@ TEST_ALL_COLUMNS = True
 
 
 # def test_very_large():
-#     metadata_set_maker_test_setup(METADATA_FILES[0])
+#     metadata_set_maker_test_setup(f'test_files/{METADATA_FILES[0]}')
 #
 #
 # def test_large():
-#     metadata_set_maker_test_setup(METADATA_FILES[1])
+#     metadata_set_maker_test_setup(f'test_files/{METADATA_FILES[1]}')
 #
 #
 # def test_medium():
-#     metadata_set_maker_test_setup(METADATA_FILES[2])
+#     metadata_set_maker_test_setup(f'test_files/{METADATA_FILES[2]}')
 #
 #
 # def test_small():
-#     metadata_set_maker_test_setup(METADATA_FILES[3])
+#     metadata_set_maker_test_setup(f'test_files/{METADATA_FILES[3]}')
 #
 #
 # def test_specific(metadata_file):
-#     metadata_set_maker_test_setup(metadata_file)
+#     metadata_set_maker_test_setup(f'test_files/{metadata_file}')
 
 
 def metadata_set_maker_test_setup(metadata_file):
@@ -73,14 +75,15 @@ def reconstruct_metadata(set_df, biosamples_ref, attr_name):
     # getting values for this attribute (and their corresponding biosample indices
     values_for_this_attr = {}
     for _, row in set_df.iterrows():
-        if attr_name in row['attributes']:
+        attributes = row['attributes'].split('; ')
+        if attr_name in attributes:
             # row is splittable
             values = row['values']
             if isinstance(values, str):
-                value = row['values'].split('; ')[row['attributes'].split('; ').index(attr_name)]
+                value = row['values'].split('; ')[attributes.index(attr_name)]
             else:
                 value = values  # if it's a number
-            values_for_this_attr[value] = row['biosample_index_list'], row['include?']
+            values_for_this_attr[str(value)] = row['biosample_index_list'], row['include?']
 
     assert sum([len(biosample_index_list) for biosample_index_list in values_for_this_attr.values()]) <= len(biosamples_ref)
 
@@ -100,25 +103,30 @@ def reconstruct_metadata(set_df, biosamples_ref, attr_name):
 def compare_metadata(reconstructed_df, metadata_df, col, values):
     """compares a column of metadata_df with a column of set_df to see if they match up"""
     for _, row in metadata_df.iterrows():
+
         biosample = row['biosample_id']
-        value = row[col]
+        value = str(row[col])
+        if isinstance(value, str):
+            value.replace(';', ':')
         if value not in values:
-            # it's possible it's a singleton or a missing value (nan)
+            # then it's possible it's a singleton or a missing value (nan), otherwise there's an issue.
             if pd.isna(value) or value == 'nan':
                 continue
             else:
-                # get frequency of value in metadata_df
-                freq = metadata_df[col].value_counts()[value]
-                if freq == 1:
-                    continue
-                else:
-                    return False
+                # check frequency of value in metadata_df  (this convulated way is necessary because of the semilcolon delimiter issue...)
+                freqs = metadata_df[col].value_counts()
+                for val in set(metadata_df[col].values):
+                    if freqs[val] == 1:
+                        continue
+                    else:
+                        if isinstance(val, str):
+                            val = val.replace(';', ':')
+                        if str(val) not in values:
+                            return False
         else:
             set_val = reconstructed_df[reconstructed_df['biosample_id'] == biosample][col].values[0]
             if set_val != value:
-                # try replacing the ; with :
-                if set_val != value.replace(';', ':'):
-                    return False
+                return False
     return True
 
 
@@ -132,6 +140,7 @@ if __name__ == '__main__':
             return True
         except Exception as e:
             print(f"Failed - {file}: {e}")
+            print(traceback.format_exc())
             return False
 
     if len(sys.argv) > 1:
