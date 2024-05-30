@@ -116,7 +116,7 @@ def compare_metadata(reconstructed_df, metadata_df, col, values):
                 # check frequency of value in metadata_df  (this convulated way is necessary because of the semilcolon delimiter issue...)
                 freqs = metadata_df[col].value_counts()
                 for val in set(metadata_df[col].values):
-                    if freqs[val] == 1:
+                    if pd.isna(val) or val == 'nan' or freqs[val] == 1:
                         continue
                     else:
                         if isinstance(val, str):
@@ -131,15 +131,16 @@ def compare_metadata(reconstructed_df, metadata_df, col, values):
 
 
 if __name__ == '__main__':
-    def single_test(file) -> bool:
+    def single_test(file, iteration=None) -> bool:
         """Runs a single test"""
         start_time = time.time()
+        iter_indicator = f"{iteration} iteration: " if iteration else ""
         try:
             metadata_set_maker_test_setup(file)
-            print(f"Passed - {file}: Success. Time taken: {time.time() - start_time} seconds")
+            print(iter_indicator + f"{file} passed successfully. Time taken: {time.time() - start_time} seconds")
             return True
         except Exception as e:
-            print(f"Failed - {file}: {e}")
+            print(iter_indicator + f"{file} FAILED: {e}")
             print(traceback.format_exc())
             return False
 

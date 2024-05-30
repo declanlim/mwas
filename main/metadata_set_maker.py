@@ -68,8 +68,8 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
     new_df_data = []
     for entry in new_df_builder:
         (attributes, values), (index_list, include) = new_df_builder[entry]
-        new_df_data.append({
-            'attributes': attributes, 'values': values, 'biosample_index_list': index_list, 'include?': include
+        new_df_data.append({  # important to force values to be string - fixes a bug related to mixed datatypes in one column
+            'attributes': attributes, 'values': str(values), 'biosample_index_list': index_list, 'include?': include
         })
     new_df = pd.DataFrame(new_df_data, columns=['attributes', 'values', 'biosample_index_list', 'include?'])
 
