@@ -44,13 +44,14 @@ def metadata_set_maker_test_setup(metadata_file):
     if os.path.exists(out_file):
         os.remove(out_file)
     set_df.to_csv(out_file, index=False)
+    output_size = os.path.getsize(out_file)
 
     if not TEST_ALL_COLUMNS:
         # spot checking random column
         row = set_df.sample().iloc[0]
         col = row['attributes'].split('; ')[0]
         set_df, values = reconstruct_metadata(set_df, biosamples_ref, col)
-        return compare_metadata(set_df, metadata_dataframe, col, values), creation_time
+        return compare_metadata(set_df, metadata_dataframe, col, values), creation_time, output_size
     else:
         # testing all columns
         columns = set_df['attributes'].apply(lambda x: x.split('; ')[0]).unique()
@@ -58,8 +59,8 @@ def metadata_set_maker_test_setup(metadata_file):
             new_set_df, values = reconstruct_metadata(set_df, biosamples_ref, col)
             if not compare_metadata(new_set_df, metadata_dataframe, col, values):
                 print(f"Failed on column: {col} on file: {metadata_file}")
-                return False, creation_time
-        return True, creation_time
+                return False, creation_time, output_size
+        return True, creation_time, output_size
 
 
 def reconstruct_metadata(set_df, biosamples_ref, attr_name):
@@ -132,35 +133,40 @@ def compare_metadata(reconstructed_df, metadata_df, col, values):
 
 
 if __name__ == '__main__':
-    def single_test(file, iteration=None) -> tuple[bool, float]:
+    def single_test(file, iteration=None) -> tuple[bool, float, int, float]:
         """Runs a single test"""
         start_time = time.time()
         iter_indicator = f"@ {iteration} iterations: " if iteration is not None else ""
         try:
-            status, creation_time = metadata_set_maker_test_setup(file)
+            status, creation_time, output_size = metadata_set_maker_test_setup(file)
             if status:
                 print(iter_indicator + f"{file} passed successfully. Time taken: {time.time() - start_time} seconds")
-                return True, creation_time
+                return True, creation_time, output_size, time.time() - start_time
             else:
                 print(iter_indicator + f"{file} FAILED gracefully. Time taken: {time.time() - start_time} seconds")
-                return False, creation_time
+                return False, creation_time, output_size, time.time() - start_time
         except Exception as e:
             print(iter_indicator + f"{file} FAILED with error: {e}")
             print(traceback.format_exc())
-            return False, 0.0
+            return False, 0.0, 0, time.time() - start_time
 
     if len(sys.argv) > 1:
         arg1 = sys.argv[1]
         if arg1.endswith('.csv'):
             single_test(arg1)
         elif arg1.endswith('.txt'):
-            with open(arg1, 'r') as f, open('failed.txt', 'w') as failed_f, open('passed.txt', 'w') as passed_f:
+            with (open(arg1, 'r') as f, open('failed.txt', 'w') as failed_f,
+                  open('passed.txt', 'w') as passed_f, open('results.csv', 'w') as results_f):
                 failed, passed = 0, 0
                 iterations, total_creation_time = 1, 0.0
+                results_f.write("bioproject, original_pickle_size, condensed_csv_size, creation_time, test_time, status\n")
                 for line in f:
-                    test_file = line.strip()
+                    # line is in form <file_name then size (if applicable)>
+                    info = line.split(' ')
+                    test_file = info[0]
+                    pickle_size = info[1] if len(info) > 1 else None
                     if test_file.endswith('.csv'):
-                        status_, creation_time_ = single_test(test_file, iterations)
+                        status_, creation_time_, output_size_, test_time = single_test(test_file, iterations)
                         if status_:
                             passed_f.write(test_file + '\n')
                             passed += 1
@@ -169,6 +175,10 @@ if __name__ == '__main__':
                             failed += 1
                         iterations += 1
                         total_creation_time += creation_time_
+
+                        bioproject = test_file.split('/')[-1][:-4]
+                        results_f.write(f"{bioproject},{pickle_size if pickle_size is not None else 'missing'},"
+                                        f"{output_size_},{creation_time_},{test_time},{status_}\n")
                 if failed > 0:
                     print(f"Failed {failed} bioprojects out of {failed + passed} bioprojects")
                 else:

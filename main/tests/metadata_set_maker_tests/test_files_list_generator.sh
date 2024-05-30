@@ -10,7 +10,7 @@ fi
 original_dir=$(pwd)
 
 cd ~/s3_downloads/bioprojects/
-ls | sort -R | head -n $amount > test_files_list_temp.txt
+ls -l | awk '{print $9, $5}' | sort -R | head -n $amount > test_files_list_temp.txt
 
 if [ -d test_file_list.txt ]; then
         rm test_file_list.txt
