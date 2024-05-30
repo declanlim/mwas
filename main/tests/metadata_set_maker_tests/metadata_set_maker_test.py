@@ -164,7 +164,7 @@ if __name__ == '__main__':
                     # line is in form <file_name then size (if applicable)>
                     info = line.split(' ')
                     test_file = info[0]
-                    pickle_size = info[1] if len(info) > 1 else None
+                    pickle_size = info[1].replace('\n', '') if len(info) > 1 else None
                     if test_file.endswith('.csv'):
                         status_, creation_time_, output_size_, test_time = single_test(test_file, iterations)
                         if status_:
@@ -177,7 +177,7 @@ if __name__ == '__main__':
                         total_creation_time += creation_time_
 
                         bioproject = test_file.split('/')[-1][:-4]
-                        results_f.write(f"{bioproject},{pickle_size if pickle_size is not None else 'missing'},{output_size_},{creation_time_},{test_time},{status_}\n")
+                        results_f.write(f"{bioproject},{pickle_size if pickle_size is not None else 'missing'},{output_size_},{creation_time_},{test_time},{'PASSED' if status_ else 'FAILED'}\n")
                 if failed > 0:
                     print(f"Failed {failed} bioprojects out of {failed + passed} bioprojects")
                 else:
