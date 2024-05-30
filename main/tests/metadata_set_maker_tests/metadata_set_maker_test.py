@@ -36,7 +36,9 @@ def metadata_set_maker_test_setup(metadata_file):
     """tests metadata_set_maker.py by comparing output to original metdata dataframe
     """
     metadata_dataframe = pd.read_csv(metadata_file)
+    create_time = time.time()
     biosamples_ref, set_df = metadata_to_set_accession(metadata_dataframe.copy())
+    creation_time = time.time() - create_time
 
     out_file = f'test_outputs/{metadata_file.split("/")[-1][:-4]}_output.csv'
     if os.path.exists(out_file):
@@ -48,17 +50,16 @@ def metadata_set_maker_test_setup(metadata_file):
         row = set_df.sample().iloc[0]
         col = row['attributes'].split('; ')[0]
         set_df, values = reconstruct_metadata(set_df, biosamples_ref, col)
-        assert compare_metadata(set_df, metadata_dataframe, col, values)
+        return compare_metadata(set_df, metadata_dataframe, col, values), creation_time
     else:
         # testing all columns
         columns = set_df['attributes'].apply(lambda x: x.split('; ')[0]).unique()
         for col in columns:
             new_set_df, values = reconstruct_metadata(set_df, biosamples_ref, col)
-
             if not compare_metadata(new_set_df, metadata_dataframe, col, values):
-                print(f"Failed for {col}")
-                assert False, f"Failed for {col}"
-        assert True
+                print(f"Failed on column: {col} on file: {metadata_file}")
+                return False, creation_time
+        return True, creation_time
 
 
 def reconstruct_metadata(set_df, biosamples_ref, attr_name):
@@ -131,18 +132,22 @@ def compare_metadata(reconstructed_df, metadata_df, col, values):
 
 
 if __name__ == '__main__':
-    def single_test(file, iteration=None) -> bool:
+    def single_test(file, iteration=None) -> tuple[bool, float]:
         """Runs a single test"""
         start_time = time.time()
-        iter_indicator = f"{iteration} iteration: " if iteration else ""
+        iter_indicator = f"@ {iteration} iterations: " if iteration is not None else ""
         try:
-            metadata_set_maker_test_setup(file)
-            print(iter_indicator + f"{file} passed successfully. Time taken: {time.time() - start_time} seconds")
-            return True
+            status, creation_time = metadata_set_maker_test_setup(file)
+            if status:
+                print(iter_indicator + f"{file} passed successfully. Time taken: {time.time() - start_time} seconds")
+                return True, creation_time
+            else:
+                print(iter_indicator + f"{file} FAILED gracefully. Time taken: {time.time() - start_time} seconds")
+                return False, creation_time
         except Exception as e:
-            print(iter_indicator + f"{file} FAILED: {e}")
+            print(iter_indicator + f"{file} FAILED with error: {e}")
             print(traceback.format_exc())
-            return False
+            return False, 0.0
 
     if len(sys.argv) > 1:
         arg1 = sys.argv[1]
@@ -151,16 +156,22 @@ if __name__ == '__main__':
         elif arg1.endswith('.txt'):
             with open(arg1, 'r') as f, open('failed.txt', 'w') as failed_f, open('passed.txt', 'w') as passed_f:
                 failed, passed = 0, 0
+                iterations, total_creation_time = 1, 0.0
                 for line in f:
                     test_file = line.strip()
                     if test_file.endswith('.csv'):
-                        if single_test(test_file):
+                        status_, creation_time_ = single_test(test_file, iterations)
+                        if status_:
                             passed_f.write(test_file + '\n')
                             passed += 1
                         else:
                             failed_f.write(test_file + '\n')
                             failed += 1
+                        iterations += 1
+                        total_creation_time += creation_time_
                 if failed > 0:
                     print(f"Failed {failed} bioprojects out of {failed + passed} bioprojects")
                 else:
                     print(f"Passed all {passed} bioprojects")
+                print(f"Total time used towards creating files: {total_creation_time} seconds,")
+                print(f"which is an average of {total_creation_time / iterations} seconds per iteration")
