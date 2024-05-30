@@ -36,7 +36,7 @@ def metadata_set_maker_test_setup(metadata_file):
     metadata_dataframe = pd.read_csv(metadata_file)
     biosamples_ref, set_df = metadata_to_set_accession(metadata_dataframe.copy())
 
-    out_file = f'test_outputs/{metadata_file[:-4]}_output.csv'
+    out_file = f'test_outputs/{metadata_file.split("/")[-1][:-4]}_output.csv'
     if os.path.exists(out_file):
         os.remove(out_file)
     set_df.to_csv(out_file, index=False)
@@ -139,23 +139,18 @@ if __name__ == '__main__':
         if arg1.endswith('.csv'):
             single_test(arg1)
         elif arg1.endswith('.txt'):
-            with open(arg1, 'r') as f:
-                failed, passed = [], []
+            with open(arg1, 'r') as f, open('failed.txt', 'w') as failed_f, open('passed.txt', 'w') as passed_f:
+                failed, passed = 0, 0
                 for line in f:
                     test_file = line.strip()
                     if test_file.endswith('.csv'):
                         if single_test(test_file):
-                            passed.append(test_file)
+                            passed_f.write(test_file + '\n')
+                            passed += 1
                         else:
-                            failed.append(test_file)
-                if len(failed) > 0:
-                    print(f"Failed {len(failed)} bioprojects out of {len(failed) + len(passed)} bioprojects")
+                            failed_f.write(test_file + '\n')
+                            failed += 1
+                if failed > 0:
+                    print(f"Failed {failed} bioprojects out of {failed + passed} bioprojects")
                 else:
-                    print(f"Passed all {len(passed)} bioprojects")
-            # create output files
-            with open('failed.txt', 'w') as f:
-                for file in failed:
-                    f.write(file + '\n')
-            with open('passed.txt', 'w') as f:
-                for file in passed:
-                    f.write(file + '\n')
+                    print(f"Passed all {passed} bioprojects")
