@@ -23,8 +23,8 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame) -> tuple[list[str], pd.
         num_uniques = metadata_df[col].nunique()
         if col == 'biosample_id':
             continue
-        elif num_uniques == 1 or num_uniques == n:
-            metadata_df.drop(col, axis=1, inplace=True)
+        elif num_uniques <= 1 or num_uniques == n:  # yes, it has been 0 strangely... (rare occurrence)
+            continue  # metadata_df.drop(col, axis=1, inplace=True)  # dropping takes too long
         else:
             metadata_df[col] = metadata_df[col].astype('category')
             factors = metadata_df[col].cat.categories

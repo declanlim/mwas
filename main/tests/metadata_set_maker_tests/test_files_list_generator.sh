@@ -32,14 +32,3 @@ mv test_file_list.txt $original_dir
 cd $original_dir
 source ~/mwas_rfam/env/bin/activate
 python3 unload_pickles.py test_file_list.txt /home/ubuntu/s3_downloads/test_csvs
-
-
-#Failed for tube
-#Failed - /home/ubuntu/s3_downloads/test_csvs/PRJNA702085.csv: Failed for tube
-#Traceback (most recent call last):
-#  File "/home/ubuntu/mwas_rfam/main/tests/metadata_set_maker_tests/metadata_set_maker_test.py", line 138, in single_test
-#    metadata_set_maker_test_setup(file)
-#  File "/home/ubuntu/mwas_rfam/main/tests/metadata_set_maker_tests/metadata_set_maker_test.py", line 60, in metadata_set_maker_test_setup
-#    assert False, f"Failed for {col}"
-#           ^^^^^
-#AssertionError: Failed for tube

@@ -35,7 +35,7 @@ TEST_ALL_COLUMNS = True
 def metadata_set_maker_test_setup(metadata_file):
     """tests metadata_set_maker.py by comparing output to original metdata dataframe
     """
-    metadata_dataframe = pd.read_csv(metadata_file)
+    metadata_dataframe = pd.read_csv(metadata_file, low_memory=False)
     create_time = time.time()
     biosamples_ref, set_df = metadata_to_set_accession(metadata_dataframe.copy())
     creation_time = time.time() - create_time
@@ -166,6 +166,7 @@ if __name__ == '__main__':
                     test_file = info[0]
                     pickle_size = info[1].replace('\n', '') if len(info) > 1 else None
                     if test_file.endswith('.csv'):
+                        print(f"Running test on {test_file}, {'of size ' + pickle_size if pickle_size is not None else '...'}")
                         status_, creation_time_, output_size_, test_time = single_test(test_file, iterations)
                         if status_:
                             passed_f.write(test_file + '\n')
