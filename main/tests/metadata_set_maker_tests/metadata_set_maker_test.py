@@ -178,7 +178,7 @@ if __name__ == '__main__':
                         total_creation_time += creation_time_
 
                         bioproject = test_file.split('/')[-1][:-4]
-                        if pickle_size is not None and pickle_size == 8267 and output_size_ == 1082:
+                        if pickle_size is not None and str(pickle_size) == '8267' and str(output_size_) == '1082':
                             comment += "Very likely to be a duplicate file, a side effect that probably indicates this bioproject has no publicly available metadata on NCBI."
                         results_f.write(f"{bioproject},{pickle_size if pickle_size is not None else 'missing'},{output_size_},{creation_time_},{test_time},{'PASSED' if status_ else 'FAILED'},{comment}\n")
                 if failed > 0:

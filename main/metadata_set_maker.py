@@ -32,13 +32,12 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
             comment += "No valid biosample_ids found in the metadata dataframe. "
             print(comment)
             is_empty = True
-        else:
+        elif metadata_df.shape[0] < n:
             comment += f"Removed {n - metadata_df.shape[0]} rows with invalid biosample_ids. "
             print(comment)
 
     if not is_empty:
         for col in metadata_df.columns:
-            col = col.replace(';', ':')  # to avoid confusion with the delimiter
             num_uniques = metadata_df[col].nunique()
             if col == 'biosample_id':
                 continue
@@ -61,6 +60,8 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
                     # note, use biosample_index_list in the final new_df, since biosample_vector can be too large an integer for pandas
                     # biosample_code is for key value in new_df_builder (remember, you can't use a list as a key in a dictionary)
 
+                    if isinstance(col, str):
+                        col = col.replace(';', ':')
                     if isinstance(factor, str):
                         factor = factor.replace(';', ':')  # to avoid confusion with the delimiter
 
