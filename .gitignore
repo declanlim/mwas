@@ -1,0 +1,12 @@
+logs/
+queries/
+wip_files/
+main/outputs
+main/pickles
+main/tests/metadata_set_maker_tests/test_outputs/*.csv
+main/tests/metadata_set_maker_tests/__pycache__/
+main/tests/__pycache__/
+main/__pycache__/
+main/csvs/*.csv
+main/tests/metadata_set_maker_tests/failed.txt
+main/tests/metadata_set_maker_tests/passed.txt

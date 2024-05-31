@@ -1,4 +1,6 @@
 # Metadata Wide Association Study (MWAS)
+(THIS README NEEDS TO BE UPDATED)
+
 Metadata wide association studies are statistical studies that find correlations between a given observation and metadata from the NCBI BioSample database (ADD LINK). Using extracted information from the BioSample Database, t-tests or permutation tests are used to calculate the statistical significance of any correlations in the data. 
 
 This repository was used for running MWAS on the Serratus rfamily database (ADD LINK, DATE)
