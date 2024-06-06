@@ -25,10 +25,20 @@ if [ "$1" == "-s" ]; then
         subset=10
     fi
 
+    # remove files if they exist
+    if [ -f file_list_with_sizes.txt ]; then
+        rm file_list_with_sizes.txt
+    fi
     touch file_list_with_sizes.txt
     size_list_file=file_list_with_sizes.txt
+    if [ -f cp_batch_command_list.txt ]; then
+        rm cp_batch_command_list.txt
+    fi
     touch cp_batch_command_list.txt
     cp_file_name=cp_batch_command_list.txt
+    if [ -f csv_files_list.txt ]; then
+        rm csv_files_list.txt
+    fi
     touch csv_files_list.txt
     disk_files_name=csv_files_list.txt
 
@@ -46,21 +56,22 @@ if [ "$1" == "-s" ]; then
     s5cmd run ${cp_file_name}
     echo "completed copying raw csv files from s3 to local disk"
 
-    time python3 converter_.py ${disk_files_name} > log.txt
+    rm log.txt
+    time python3 converter_.py ${disk_files_name} ~/converted_metadata_pickles > log.txt
     echo "completed converting csv files to pickle files of condensed metadata"
 
     # sync the converted_metadata_pickles with an s3 bucket called s3://serratus-biosamples/condensed-bioproject-metadata/
-    s5cmd sync ~/converted_metadata_pickles/* ${S3_CONDENSED_METADATA_DIR}
+    s5cmd sync ~/converted_metadata_pickles/ ${S3_CONDENSED_METADATA_DIR}
     echo "completed syncing pickle files to s3"
 
 elif [ "$1" == "-f" ]; then
     s5cmd cp -f ${S3_RAW_METADATA_DIR}/* ${local_destination}
     echo "completed copying raw csv files from s3 to local disk"
 
-    # time python3 converter_.py ${local_destination} > log.txt
-    time parallel -j 4 python3 converter_.py ::: ${local_destination}/* > log.txt
+    # time python3 converter_.py ${local_destination} ~/converted_metadata_pickles > log.txt
+    time parallel -j 4 python3 converter_.py ::: ${local_destination} ::: ~/converted_metadata_pickles > log.txt
     echo "completed converting csv files to pickle files of condensed metadata"
 
-    s5cmd sync ~/converted_metadata_pickles/* ${S3_CONDENSED_METADATA_DIR}
+    s5cmd sync ~/converted_metadata_pickles/ ${S3_CONDENSED_METADATA_DIR}
     echo "completed syncing pickle files to s3"
 fi

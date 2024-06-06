@@ -1,13 +1,16 @@
 """turn a bioproject metadata file into a
 """
 import sys
+from typing import Any, Tuple
 
 import pandas as pd
 import time
 import os
 
+from pandas import DataFrame, Series
 
-def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=False) -> tuple[list[str], pd.DataFrame, str] | tuple[list[str], pd.DataFrame, str, pd.DataFrame]:
+
+def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=False) -> tuple[Any, DataFrame, str, DataFrame | tuple | Any, bool]:
     """takes a metadata dataframe from a bioproject (accessed by biosample_id)
         and returns a list of biosample accessions and a dataframe where there are 3 columns:
         attribute(s), value(s) (an attribute(s) + value(s) pair makes a distinct set), and biosample_id,
@@ -97,12 +100,14 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
             'attributes': attributes, 'values': str(values), 'biosample_index_list': index_list, 'include?': include
         })
     new_df = pd.DataFrame(new_df_data, columns=['attributes', 'values', 'biosample_index_list', 'include?'])
+    empty_result = False
     if new_df.shape[0] == 0:
         comment += "No sets were generated from the metadata dataframe. "
         print("No sets were generated from the metadata dataframe.")
+        empty_result = True
 
     biosamples_ref_lst = metadata_df['biosample_id'].tolist()
-    return biosamples_ref_lst, new_df, comment, metadata_df if update_metadata_df else ()
+    return biosamples_ref_lst, new_df, comment, metadata_df if update_metadata_df else (), empty_result
 
 
 if __name__ == '__main__':

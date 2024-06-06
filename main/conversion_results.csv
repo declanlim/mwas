@@ -1,0 +1,2 @@
+file,pickle_size,output_size,processing_time,comment
+tests/metadata_set_maker_tests/test_files/TEST_LARGE--PRJDB11622.csv,170600,7781,8.405781507492065,

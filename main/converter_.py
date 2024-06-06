@@ -12,15 +12,18 @@ def process_file(_metadata_file, _storage):
     metadata_dataframe = pd.read_csv(_metadata_file)
     # get size of metadata file
     _size = os.path.getsize(_metadata_file)
-    biosamples_ref, set_df, _comment, _ = metadata_to_set_accession(metadata_dataframe)
+    biosamples_ref, set_df, _comment, _, is_empty = metadata_to_set_accession(metadata_dataframe)
 
     # pickle the biosamples_ref and set_df into 1 file. Don't worry about other file data for now
     # create the new file in dir called storage
     with open(f"{_storage}/{_metadata_file.split('/')[-1]}.mwas", 'wb') as f:
         # we want to dump both objects into the same file but so that we can extract them separately later
-        pickle.dump(biosamples_ref, f)
-        pickle.dump(set_df, f)
-        # get pickle size
+        if is_empty:
+            f.write(b'0')
+        else:
+            pickle.dump(biosamples_ref, f)
+            pickle.dump(set_df, f)
+    # get pickle size
     _pickle_size = os.path.getsize(f"{_storage}/{_metadata_file.split('/')[-1]}.mwas")
     _conversion_time = time.time() - start_time
     return _size, _pickle_size, _conversion_time, _comment

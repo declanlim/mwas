@@ -40,7 +40,7 @@ def metadata_set_maker_test_setup(metadata_file):
     """
     metadata_dataframe = pd.read_csv(metadata_file, low_memory=False)
     create_time = time.time()
-    biosamples_ref, set_df, comment, metadata_dataframe = metadata_to_set_accession(metadata_dataframe, True)
+    biosamples_ref, set_df, comment, metadata_dataframe, _ = metadata_to_set_accession(metadata_dataframe, True)
     creation_time = time.time() - create_time
 
     out_file = f'test_outputs/{metadata_file.split("/")[-1][:-4]}_output.csv'
