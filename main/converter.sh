@@ -56,13 +56,15 @@ if [ "$1" == "-s" ]; then
     s5cmd run ${cp_file_name}
     echo "completed copying raw csv files from s3 to local disk"
 
-    rm log.txt
     time python3 converter_.py ${disk_files_name} ~/converted_metadata_pickles > log.txt
     echo "completed converting csv files to pickle files of condensed metadata"
 
     # sync the converted_metadata_pickles with an s3 bucket called s3://serratus-biosamples/condensed-bioproject-metadata/
     s5cmd sync ~/converted_metadata_pickles/ ${S3_CONDENSED_METADATA_DIR}
     echo "completed syncing pickle files to s3"
+
+    rm ${cp_file_name}
+    rm ${disk_files_name}
 
 elif [ "$1" == "-f" ]; then
     s5cmd cp -f ${S3_RAW_METADATA_DIR}/* ${local_destination}

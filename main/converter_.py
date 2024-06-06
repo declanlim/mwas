@@ -16,7 +16,8 @@ def process_file(_metadata_file, _storage):
 
     # pickle the biosamples_ref and set_df into 1 file. Don't worry about other file data for now
     # create the new file in dir called storage
-    with open(f"{_storage}/{_metadata_file.split('/')[-1]}.mwas", 'wb') as f:
+    new_file = f"{_storage}/{_metadata_file.split('/')[-1][:-4]}.mwaspkl"
+    with open(new_file, 'wb') as f:
         # we want to dump both objects into the same file but so that we can extract them separately later
         if is_empty:
             f.write(b'0')
@@ -24,7 +25,7 @@ def process_file(_metadata_file, _storage):
             pickle.dump(biosamples_ref, f)
             pickle.dump(set_df, f)
     # get pickle size
-    _pickle_size = os.path.getsize(f"{_storage}/{_metadata_file.split('/')[-1]}.mwas")
+    _pickle_size = os.path.getsize(new_file)
     _conversion_time = time.time() - start_time
     return _size, _pickle_size, _conversion_time, _comment
 
