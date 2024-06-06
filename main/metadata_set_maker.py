@@ -1,5 +1,7 @@
 """turn a bioproject metadata file into a
 """
+import sys
+
 import pandas as pd
 import time
 import os
@@ -104,13 +106,14 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
 
 
 if __name__ == '__main__':
-    metadata_file = 'tests/metadata_set_maker_tests/TEST--PRJEB37099.csv'
-    metadata_dataframe = pd.read_csv(metadata_file)
-    start_time = time.time()
-    biosamples_ref, set_df, comment = metadata_to_set_accession(metadata_dataframe)
-    end_time = time.time()
-    print(f'Time taken: {end_time - start_time} seconds')
-    # convert to csv store in csvs
-    if os.path.exists('tests/TEST--PRJEB37099_SETS.csv'):
-        os.remove('tests/TEST--PRJEB37099_SETS.csv')
-    set_df.to_csv('../csvs/TEST--PRJEB37099_SETS.csv', index=False)
+    if len(sys.argv) < 2 or sys.argv[1] == 'test':
+        metadata_file = 'tests/metadata_set_maker_tests/TEST--PRJEB37099.csv'
+        metadata_dataframe = pd.read_csv(metadata_file)
+        start_time = time.time()
+        biosamples_ref, set_df, comment = metadata_to_set_accession(metadata_dataframe)
+        end_time = time.time()
+        print(f'Time taken: {end_time - start_time} seconds')
+        # convert to csv store in csvs
+        if os.path.exists('tests/TEST--PRJEB37099_SETS.csv'):
+            os.remove('tests/TEST--PRJEB37099_SETS.csv')
+        set_df.to_csv('tests/TEST--PRJEB37099_SETS.csv', index=False)
