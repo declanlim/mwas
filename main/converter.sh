@@ -67,7 +67,7 @@ if [ "$1" == "-s" ]; then
     rm ${disk_files_name}
 
 elif [ "$1" == "-f" ]; then
-    s5cmd cp -f ${S3_RAW_METADATA_DIR}/* ${local_destination}
+    s5cmd sync ${S3_RAW_METADATA_DIR}/ ${local_destination}
     echo "completed copying raw csv files from s3 to local disk"
 
     # time python3 converter_.py ${local_destination} ~/converted_metadata_pickles > log.txt
@@ -76,4 +76,9 @@ elif [ "$1" == "-f" ]; then
 
     s5cmd sync ~/converted_metadata_pickles/ ${S3_CONDENSED_METADATA_DIR}
     echo "completed syncing pickle files to s3"
+else
+    echo "Please specify either -s for subset or -f for full"
 fi
+
+# nohup time python3 converter_.py ~/raw_metadata_csvs ~/converted_metadata_pickles > log.txt 2>&1 &
+# time python3 converter_.py ~/raw_metadata_csvs ~/converted_metadata_pickles
