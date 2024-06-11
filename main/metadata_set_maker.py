@@ -75,7 +75,7 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
                     except OverflowError:
                         comment += "Data is too large to process. "
                         print(f"Data is too large to process. Exiting...")
-                        return [], pd.DataFrame(), comment
+                        return [], pd.DataFrame(), comment, _, True
                     if binary_key_coding:
                         try:
                             biosample_code = int(''.join(['1' if x else '0' for x in biosample_vector_series]), 2)  # this is faster than using str(biosample_vector_series)
@@ -115,7 +115,7 @@ if __name__ == '__main__':
         metadata_file = 'tests/metadata_set_maker_tests/TEST--PRJEB37099.csv'
         metadata_dataframe = pd.read_csv(metadata_file)
         start_time = time.time()
-        biosamples_ref, set_df, comment = metadata_to_set_accession(metadata_dataframe)
+        biosamples_ref, set_df, comment, _, _ = metadata_to_set_accession(metadata_dataframe)
         end_time = time.time()
         print(f'Time taken: {end_time - start_time} seconds')
         # convert to csv store in csvs
