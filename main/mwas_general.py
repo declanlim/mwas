@@ -6,6 +6,7 @@ import sys
 import platform
 import subprocess
 import pickle
+import time
 # import warnings
 # import logging
 from random import shuffle
@@ -19,18 +20,43 @@ import pandas as pd
 import numpy as np
 import scipy.stats as stats
 
+import tracemalloc
+
 # sql constants
-CONNECTION_INFO = {
+SERRATUS_CONNECTION_INFO = {
     'host': 'serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com',
     'database': 'summary',
     'user': 'public_reader',
     'password': 'serratus'
 }
-query = """
+LOGAN_CONNECTION_INFO = {
+    'host': 'serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com',
+    'database': 'logan',
+    'user': 'public_reader',
+    'password': 'serratus'
+}
+
+SRARUN_QUERY = ("""
     SELECT bio_project, bio_sample, run, spots
-    FROM %s -- srarun
+    FROM srarun
     WHERE run in (%s)
-"""
+    """, """
+    SELECT bio_project, bio_sample, run
+    FROM srarun
+    WHERE run in (%s)
+""")
+LOGAN_SRA_QUERY = ("""
+    SELECT bioproject as bio_project, biosample as bio_sample, acc as run, ((CAST(mbases AS BIGINT) * 1000000) / avgspotlen) AS spots 
+    FROM sra
+    WHERE acc in (%s)
+    """, """
+    SELECT bioproject as bio_project, biosample as bio_sample, acc as run
+    FROM sra
+    WHERE acc in (%s)
+""")
+
+CONNECTION_INFO = LOGAN_CONNECTION_INFO
+QUERY = LOGAN_SRA_QUERY
 
 # system & path constants
 PICKLE_DIR = 'pickles'  # will be relative to working directory
@@ -53,11 +79,22 @@ SCHEDULING = False
 BLACKLIST = set()  # list of bioprojects that are too large
 
 # stats constants
+# flags
+IMPLICIT_ZEROS = True  # TODO: implement this flag
+GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
+ALREADY_NORMALIZED = False  # if it's false, then we need to normalize the data by dividing quantifier by spots
+P_VALUE_THRESHOLD = 0.005
+# constants
 MAP_UNKNOWN = 0  # maybe np.nan
 NORMALIZING_CONST = 1000000  # 1 million
-OUT_COLS = ['bioproject', 'group', 'status', 'metadata_field', 'metadata_value', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
-            'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
 
+# OUT_COLS = ['bioproject', 'group', 'metadata_field', 'metadata_value', 'status', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
+#             'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
+OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,runtime,memory_usage,num_true,num_false,mean_rpm_true,mean_rpm_false,sd_rpm_true,sd_rpm_false,fold_change,test_statistic,p_value,true_biosamples,false_biosamples"""
+
+# debugging
+num_tests = 0
+progress = 0
 
 class BioProjectInfo:
     """Class to store information about a bioproject"""
@@ -122,8 +159,10 @@ def get_bioprojects_df(runs: list) -> pd.DataFrame | None:
 
     with psycopg2.connect(**CONNECTION_INFO) as conn:
         try:
-            df = pd.read_sql(query % ('srarun', runs_str), conn)
-            df['spots'] = df['spots'].replace(0, NORMALIZING_CONST)
+            query = QUERY[0] if not ALREADY_NORMALIZED else QUERY[1]
+            df = pd.read_sql(query % runs_str, conn)
+            if not ALREADY_NORMALIZED:
+                df['spots'] = df['spots'].replace(0, NORMALIZING_CONST)
             return df
         except psycopg2.Error:
             print("Error in executing query")
@@ -275,9 +314,9 @@ def get_log_fold_change(true, false):
     if true == 0 and false == 0:
         return 0
     elif true == 0:
-        return -np.inf
+        return 'negative inf'
     elif false == 0:
-        return np.inf
+        return 'inf'
     else:
         return np.log2(true / false)
 
@@ -287,23 +326,29 @@ def mean_diff_statistic(x, y, axis):
     return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 
-def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst: np.array, group_name: str, bioproject_name: str, output_constructor: list) -> None:
+def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst: np.array,
+                  group_name: str, bioproject_name: str, skip_tests: bool) -> str:
     """Process the given group, and return an output file
     """
     # num_metasets = metadata_df.shape[0]
     num_biosamples = len(biosample_ref)
-    status = 0
+    result = ''
 
     for _, row in metadata_df.iterrows():
+        test_start_time = time.time()
+        tracemalloc.start()
+
         index_is_inlcude = row['include?']
         index_list = row['biosample_index_list']
 
         num_true = len(index_list) if index_is_inlcude else num_biosamples - len(index_list)
         num_false = len(biosample_ref) - num_true
-        if num_true < 2 or num_false < 2:
+
+        if num_true < 2 or num_false < 2:  # this should never happen, but just in case, we skip
             print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2')
             continue
 
+        # could be optimized?
         true_rpm, false_rpm = [], []
         for i, rpm_val in enumerate(group_rpm_lst):
             if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
@@ -318,43 +363,63 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
         sd_rpm_true = np.nanstd(true_rpm)
         sd_rpm_false = np.nanstd(false_rpm)
 
-        # skip if both conditions have 0 reads
+        # skip if both conditions have 0 reads (this should never happen, but just in case)
         if mean_rpm_true == mean_rpm_false == 0:
             continue
 
-        # calculate fold change and check if any values are nan
-        fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
+        if skip_tests:
+            fold_change, test_statistic, p_value = '', '', ''
+            true_biosamples, false_biosamples = '', ''
+            status = 'skipped_statistical_testing'
+        else:
+            status = ''
+            # calculate fold change and check if any values are nan
+            fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
 
-        # if there are at least 4 values in each group, run a permutation test
-        # otherwise run a t test
-        try:
-            print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
-            if min(num_false, num_true) < 4:
-                # scipy t test
-                test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
-                                                                     mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
-                                                                     equal_var=False)
+            # if there are at least 4 values in each group, run a permutation test
+            # otherwise run a t test
+            try:
+                print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
+                if min(num_false, num_true) < 4:
+                    # scipy t test
+                    status = 't_test'
+                    test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
+                                                                         mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
+                                                                         equal_var=False)
+                else:
+                    # run a permutation test
+                    status = 'permutation_test'
+                    res = stats.permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=10000,
+                                                 vectorized=True)
+                    p_value, test_statistic = res.pvalue, res.statistic
+            except Exception as e:
+                print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}')
+                continue
+
+            if p_value < P_VALUE_THRESHOLD:
+                status += '; significant'
+                true_biosamples = '; '.join([biosample_ref[i] for i in index_list])
+                false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list])
+                if not index_is_inlcude:
+                    true_biosamples, false_biosamples = false_biosamples, true_biosamples
             else:
-                # run a permutation test
-                res = stats.permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=10000,
-                                             vectorized=True)
-                p_value = res.pvalue
-                test_statistic = res.statistic
-        except Exception as e:
-            print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}')
-            continue
+                true_biosamples, false_biosamples = '', ''
+            print(f"Finished with p-value: {p_value}")
 
-        # add values to output dict
-        output_entry = {
-            'bioproject': bioproject_name, 'group': group_name, 'status': status,
-            'metadata_field': row['attributes'], 'metadata_value': row['values'],
-            'num_true': num_true, 'num_false': num_false,
-            'mean_rpm_true': mean_rpm_true, 'mean_rpm_false': mean_rpm_false,
-            'sd_rpm_true': sd_rpm_true, 'sd_rpm_false': sd_rpm_false,
-            'fold_change': fold_change,
-            'test_statistic': test_statistic, 'p_value': p_value
-        }
-        output_constructor.append(output_entry)
+        snapshot = tracemalloc.take_snapshot()
+        tracemalloc.stop()
+        memory_usage = sum([stat.size for stat in snapshot.statistics('lineno')])
+
+        # record the output
+        this_result = (f"{bioproject_name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{time.time() - test_start_time},{memory_usage / 1024**2}MB,"
+                       f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
+        result += this_result
+        global progress
+        progress += 1
+        print(this_result)
+        print(f"Progress: {round(100 * (progress/num_tests), 2)}%")
+
+    return result
 
 
 def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.DataFrame | None:
@@ -363,7 +428,7 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     print(f"Processing {bioproject.name}...")
     bioproject.load_metadata()  # access this df as bioproject.metadata_df
 
-    if bioproject.metadata_row_count == 0:
+    if bioproject.metadata_row_count == 0:  # although no metadata should have 0 rows, since those would be condensed to an empty file and then filtered out in metadata_retrieval, this is just a safety check
         print(f"Skipping {bioproject.name} since its metadata is empty or too small")
         bioproject.delete_metadata()
         return None
@@ -372,26 +437,39 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     # get subset of main_df that belongs to this bioproject
     subset_df = main_df[main_df['bio_project'] == bioproject.name]
     # subset_df = subset_df[subset_df['bio_sample'].isin(bioproject.metadata_ref_lst)]
+
+    # rpm map building
     groups = subset_df['group'].unique()
     groups_rpm_map = {group: np.zeros(num_biosamples, float) for group in groups}  # remember, numpy arrays work better with preallocation
-
     for i, biosample in enumerate(bioproject.metadata_ref_lst):  # it's very important that we're iterating in the same order as the reference list
         # get the row for the biosample
         biosample_subset = subset_df[subset_df['bio_sample'] == biosample]
         for g in biosample_subset['group'].unique():
             row = biosample_subset[biosample_subset['group'] == g]
-            groups_rpm_map[g][i] = row['quantifier'].values[0] / row['spots'].values[0] * NORMALIZING_CONST if row['spots'].values[0] != 0 else 0
+            if ALREADY_NORMALIZED:
+                groups_rpm_map[g][i] = row['quantifier'].values[0]
+            else:
+                groups_rpm_map[g][i] = row['quantifier'].values[0] / row['spots'].values[0] * NORMALIZING_CONST if row['spots'].values[0] != 0 else MAP_UNKNOWN
+
+    global num_tests
+    num_tests = len(groups) * bioproject.metadata_row_count
+    del subset_df, groups
 
     # group processing
-    output_constructor = []
+    output_constructor = ''
     for group in groups_rpm_map:
-        process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, groups_rpm_map[group], group, bioproject.name, output_constructor)
-
-    output_df = pd.DataFrame(output_constructor, columns=OUT_COLS)
-    output_df.sort_values(by='p_value', inplace=True)
+        skip_tests = False
+        if GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
+            # count num nonzeros in this column
+            num_nonzeros = np.count_nonzero(groups_rpm_map[group])
+            if num_nonzeros < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
+                print(f"Not doing tests for {group} because it has too few nonzeros ({num_nonzeros})")
+                skip_tests = True
+        # run tests on this group
+        output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, groups_rpm_map[group], group, bioproject.name, skip_tests)
     bioproject.delete_metadata()
 
-    return output_df
+    return output_constructor
 
 
 def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: MountTmpfs) -> None:
@@ -458,21 +536,22 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
             # PROCESS THE BLOCK
             for biopj in biopj_info_dict.keys():
                 try:
-                    output_file = process_bioproject(biopj_info_dict[biopj], main_df)
+                    output_text_lines = process_bioproject(biopj_info_dict[biopj], main_df)
                 except Exception as e:
                     print(f"Error processing bioproject {biopj}: {e}")
                     biopj_info_dict[biopj].delete_metadata()
                     continue
 
                 # OUTPUT FILE (FOR THIS PARTICULAR BIOPROJECT) TODO: postprocessing will involve combining all these files stored on disk
-                if output_file is not None and output_file.shape[0] > 1:
+                if output_text_lines is not None and output_text_lines:
                     try:
                         # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
                         with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
-                            output_file.to_csv(f, index=False)
+                            f.write(OUT_COLS_STR % input_info[0] + '\n')
+                            f.write(output_text_lines)
                     except Exception as e:
                         print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
-                elif output_file is not None and output_file.shape[0] == 1:
+                elif output_text_lines is not None and output_text_lines == []:
                     print(f"Output file for {biopj} is empty. Not creating a file for it.")
                 else:
                     print(f"There was a problem with making an output file for {biopj}")
@@ -503,10 +582,21 @@ def cleanup(mount_tmpfs: MountTmpfs) -> Any:
     if platform.system() == 'Linux':
         mount_tmpfs.unmount()
 
+#
+# def display_memory():
+#     """Display the current and peak memory usage for debugging purposes"""
+#     current, peak = tracemalloc.get_traced_memory()
+#     return f"Current memory usage: {current / 10**6} MB; Peak: {peak / 10**6} MB"
+#
+#
+# def top_memory():
+#     """Display the top memory usage for debugging purposes"""
+#     return [x for x in tracemalloc.take_snapshot().traces._traces if 'mwas_general' in x[2][0][0]]
+
 
 if __name__ == '__main__':
-    # warnings.filterwarnings('ignore')  # FIX THIS LATER
     num_args = len(sys.argv)
+    time_start = time.time()
 
     # Check if the correct number of arguments is provided
     if num_args < 2 or sys.argv[1] in ('-h', '--help'):
@@ -552,6 +642,8 @@ if __name__ == '__main__':
 
         # UNMOUNT TMPFS
         mount_tmpfs.unmount()
+        # print(display_memory())
+        print(f"Time taken: {round((time.time() - time_start) / 60, 3)} minutes")
         sys.exit(0)
     else:
         print("Invalid arguments")

@@ -9,7 +9,7 @@ import os
 
 from pandas import DataFrame, Series
 
-
+# TODO: everything to lowercase, and remove commas
 def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=False) -> tuple[Any, DataFrame, str, DataFrame | tuple | Any, bool]:
     """takes a metadata dataframe from a bioproject (accessed by biosample_id)
         and returns a list of biosample accessions and a dataframe where there are 3 columns:

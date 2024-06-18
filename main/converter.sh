@@ -80,5 +80,7 @@ else
     echo "Please specify either -s for subset or -f for full"
 fi
 
-# nohup time python3 converter_.py ~/raw_metadata_csvs ~/converted_metadata_pickles > log.txt 2>&1 &
+# nohup time python3 converter_.py ~/raw_metadata_csvs ~/converted_metadata_pickles > logs/log2.txt 2>&1 &
 # time python3 converter_.py ~/raw_metadata_csvs ~/converted_metadata_pickles
+
+# nohup time python3 converter_.py ~/raw_metadata_csvs ~/converted_metadata_pickles --start_at PRJEB37884 > logs/log3.txt 2>&1 &
