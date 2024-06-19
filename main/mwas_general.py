@@ -84,17 +84,21 @@ IMPLICIT_ZEROS = True  # TODO: implement this flag
 GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
 ALREADY_NORMALIZED = False  # if it's false, then we need to normalize the data by dividing quantifier by spots
 P_VALUE_THRESHOLD = 0.005
+
+ONLY_T_TEST = False  # if True, then only t tests will be run, and other tests, e.g. permutation tests, will not be done
+
 # constants
 MAP_UNKNOWN = 0  # maybe np.nan
 NORMALIZING_CONST = 1000000  # 1 million
 
 # OUT_COLS = ['bioproject', 'group', 'metadata_field', 'metadata_value', 'status', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
 #             'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
-OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,runtime,memory_usage,num_true,num_false,mean_rpm_true,mean_rpm_false,sd_rpm_true,sd_rpm_false,fold_change,test_statistic,p_value,true_biosamples,false_biosamples"""
+OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,runtime_seconds,memory_usage_bytes,num_true,num_false,mean_rpm_true,mean_rpm_false,sd_rpm_true,sd_rpm_false,fold_change,test_statistic,p_value,true_biosamples,false_biosamples"""
 
 # debugging
 num_tests = 0
 progress = 0
+
 
 class BioProjectInfo:
     """Class to store information about a bioproject"""
@@ -380,7 +384,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
             # otherwise run a t test
             try:
                 print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
-                if min(num_false, num_true) < 4:
+                if min(num_false, num_true) < 4 or ONLY_T_TEST:
                     # scipy t test
                     status = 't_test'
                     test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
@@ -406,18 +410,17 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
                 true_biosamples, false_biosamples = '', ''
             print(f"Finished with p-value: {p_value}")
 
-        snapshot = tracemalloc.take_snapshot()
+        _, peak_memory = tracemalloc.get_traced_memory()
         tracemalloc.stop()
-        memory_usage = sum([stat.size for stat in snapshot.statistics('lineno')])
 
         # record the output
-        this_result = (f"{bioproject_name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{time.time() - test_start_time},{memory_usage / 1024**2}MB,"
+        this_result = (f"{bioproject_name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{time.time() - test_start_time},{peak_memory},"
                        f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
         result += this_result
         global progress
-        progress += 1
+        progress += int(not skip_tests)
         print(this_result)
-        print(f"Progress: {round(100 * (progress/num_tests), 2)}%")
+        print(f"Progress: {progress} tests completed of {num_tests} tests completed for {bioproject_name}. ({round(100 * (progress/num_tests), 3)}%)\n")
 
     return result
 
@@ -439,34 +442,61 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     # subset_df = subset_df[subset_df['bio_sample'].isin(bioproject.metadata_ref_lst)]
 
     # rpm map building
+    time_build = time.time()
     groups = subset_df['group'].unique()
-    groups_rpm_map = {group: np.zeros(num_biosamples, float) for group in groups}  # remember, numpy arrays work better with preallocation
-    for i, biosample in enumerate(bioproject.metadata_ref_lst):  # it's very important that we're iterating in the same order as the reference list
-        # get the row for the biosample
-        biosample_subset = subset_df[subset_df['bio_sample'] == biosample]
-        for g in biosample_subset['group'].unique():
-            row = biosample_subset[biosample_subset['group'] == g]
-            if ALREADY_NORMALIZED:
-                groups_rpm_map[g][i] = row['quantifier'].values[0]
-            else:
-                groups_rpm_map[g][i] = row['quantifier'].values[0] / row['spots'].values[0] * NORMALIZING_CONST if row['spots'].values[0] != 0 else MAP_UNKNOWN
+    groups_rpm_map = {group: [np.zeros(num_biosamples, float), False] for group in groups}  # remember, numpy arrays work better with preallocation
+    missing_biosamples = set()
+    for g in groups:
+        group_subset = subset_df[subset_df['group'] == g]
+        if GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
+            num_nonzeros = group_subset['quantifier'].count()
+            if num_nonzeros < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
+                groups_rpm_map[g][1] = True
 
+        for biosample in group_subset['bio_sample'].unique():
+            if biosample in missing_biosamples:
+                continue
+            try:
+                i = bioproject.metadata_ref_lst.index(biosample)  # get the index of the biosample in the reference list
+            except ValueError:
+                missing_biosamples.add(biosample)
+                continue
+
+            biosample_subset = group_subset[group_subset['bio_sample'] == biosample]
+            reads, spots = biosample_subset['quantifier'], biosample_subset['spots']
+
+            # get mean of the quantifier for this biosample in this group and load that into the rpm map
+            if len(biosample_subset) > 1:
+                if ALREADY_NORMALIZED:
+                    groups_rpm_map[g][0][i] = np.mean(reads.values)
+                else:
+                    groups_rpm_map[g][0][i] = np.mean([reads.values[x] / (spots.values[x] * NORMALIZING_CONST)
+                                                       if spots.values[x] != 0 else MAP_UNKNOWN
+                                                       for x in range(len(biosample_subset))])
+            else:
+                if ALREADY_NORMALIZED:
+                    groups_rpm_map[g][0][i] = reads.values[0]
+                else:
+                    groups_rpm_map[g][0][i] = reads.values[0] / spots.values[0] * NORMALIZING_CONST \
+                                              if spots.values[0] != 0 else MAP_UNKNOWN
+
+    num_skipped_groups = sum([groups_rpm_map[group][1] for group in groups_rpm_map])
+    print(f"{num_skipped_groups} groups will be skipped because they have too few nonzeros")
     global num_tests
-    num_tests = len(groups) * bioproject.metadata_row_count
+    num_tests = (len(groups) - num_skipped_groups) * bioproject.metadata_row_count
     del subset_df, groups
+    print(f"Not found in ref lst: {', '.join(missing_biosamples)} for {bioproject.name} - this implies there was no metadata for this biosample provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI")
+    print(f"Built rpm map for {bioproject.name} in {round(time.time() - time_build, 2)} seconds\n")
+    print(f"STARTING TESTS FOR {bioproject.name}...\n")
 
     # group processing
     output_constructor = ''
     for group in groups_rpm_map:
-        skip_tests = False
-        if GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
-            # count num nonzeros in this column
-            num_nonzeros = np.count_nonzero(groups_rpm_map[group])
-            if num_nonzeros < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
-                print(f"Not doing tests for {group} because it has too few nonzeros ({num_nonzeros})")
-                skip_tests = True
+        rpm_list, skip = groups_rpm_map[group]
+        if skip:
+            print(f"Not doing tests for {group} because it has too few nonzeros")
         # run tests on this group
-        output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, groups_rpm_map[group], group, bioproject.name, skip_tests)
+        output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, rpm_list, group, bioproject.name, skip)
     bioproject.delete_metadata()
 
     return output_constructor
@@ -480,6 +510,8 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # ================
     # PRE-PROCESSING
     # ================
+    date = time.asctime().replace(' ', '_').replace(':', '-')
+    print(f"Starting MWAS at {date}")
 
     # TODO: HASHING THE INPUT FILE
     # hash_code = hash_file(data_file)
@@ -546,7 +578,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                 if output_text_lines is not None and output_text_lines:
                     try:
                         # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
-                        with open(f"{OUTPUT_DIR_DISK}/{biopj}_output.csv", 'w') as f:
+                        with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as f:
                             f.write(OUT_COLS_STR % input_info[0] + '\n')
                             f.write(output_text_lines)
                     except Exception as e:
