@@ -15,3 +15,5 @@ pickles/
 main/blacklist.txt
 main/csvs/
 main/readable_condensed_bioproject_metadata_csvs/
+wip_files/
+main/other_data_files/

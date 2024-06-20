@@ -1,4 +1,3 @@
-import os
 import sys
 import random
 import psycopg2
@@ -38,12 +37,17 @@ def get_bioprojects_df(bioprojects: list) -> pd.DataFrame | None:
             return None
 
 
+class WrongFileFormatError(Exception):
+    """Raised when the file format is not correct"""
+    pass
+
+
 if __name__ == '__main__':
     # get first arg which is a list of bioprojects
     if len(sys.argv) < 2:
         print("Usage: bioproject_sampling.py <bioprojects.txt>")
         sys.exit(1)
-    else:
+    elif sys.argv[1] == 'bioprojects.txt':
         # bioprojects should be a <ls -lrS> from ubuntu output of the bioprojects directory
         # i.e. -rw-rw-r-- 1 ubuntu ubuntu     3399 Jun 12 01:54 PRJNA306861.mwaspkl
         bioprojects_list = sys.argv[1]
@@ -86,3 +90,23 @@ if __name__ == '__main__':
         df['quantifier'] = [random.choice([0, 1000]) for _ in range(len(df))]
         # write to file
         df.to_csv('bioprojects_sample_mwas_test.csv', index=False)
+    elif len(sys.argv) > 2 and sys.argv[1] == '-with':
+        try:
+            if not sys.argv[2].endswith('.txt'):
+                raise WrongFileFormatError("File should be a .txt file")
+            with open(sys.argv[2], 'r') as f:
+                bioprojects = [line.strip() for line in f]
+                df = get_bioprojects_df(bioprojects)
+                df['group'] = [random.choice(['A', 'B', 'C']) for _ in range(len(df))]
+                df['quantifier'] = [random.choice([0, 1000]) for _ in range(len(df))]
+                df.to_csv(f'sample_mwas_test_from_{sys.argv[2][:-4]}.csv', index=False)
+
+        except FileNotFoundError:
+            print(f"File {sys.argv[2]} not found")
+            sys.exit(1)
+        except WrongFileFormatError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)

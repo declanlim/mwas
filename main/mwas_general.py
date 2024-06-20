@@ -59,8 +59,8 @@ CONNECTION_INFO = LOGAN_CONNECTION_INFO
 QUERY = LOGAN_SRA_QUERY
 
 # system & path constants
-PICKLE_DIR = 'pickles'  # will be relative to working directory
-OUTPUT_DIR_DISK = 'outputs'
+PICKLE_DIR = './pickles'  # will be relative to working directory
+OUTPUT_DIR_DISK = './outputs'
 S3_METADATA_DIR = 's3://serratus-biosamples/condensed-bioproject-metadata'  # 's3://serratus-biosamples/mwas_setup/bioprojects'
 # S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
 OS = platform.system()
@@ -270,7 +270,7 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
     with open(ls_file_name, 'w+') as f:
         # writing a bucket path for each line in our file list file. A file format is needed for s5cmd
         for biopj in biopj_block:
-            f.write(f'ls {S3_METADATA_DIR}/{biopj}\n')
+            f.write(f'ls {S3_METADATA_DIR}/{biopj}.\n')
 
     # List files with sizes using s5cmd (remember, this only looks through a single block of bioprojects)
     # note: s5cmd does not support piping, so we have to use awk here as opposed to in the previous step for each line
@@ -402,8 +402,14 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
 
             if p_value < P_VALUE_THRESHOLD:
                 status += '; significant'
-                true_biosamples = '; '.join([biosample_ref[i] for i in index_list])
-                false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list])
+                if num_true < 1000:
+                    true_biosamples = '; '.join([biosample_ref[i] for i in index_list])
+                else:
+                    true_biosamples = 'too many biosamples to list'
+                if num_false < 1000:
+                    false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list])
+                else:
+                    false_biosamples = 'too many biosamples to list'
                 if not index_is_inlcude:
                     true_biosamples, false_biosamples = false_biosamples, true_biosamples
             else:
@@ -430,8 +436,10 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     """
     print(f"Processing {bioproject.name}...")
     bioproject.load_metadata()  # access this df as bioproject.metadata_df
+    time_start = time.time()
 
-    if bioproject.metadata_row_count == 0:  # although no metadata should have 0 rows, since those would be condensed to an empty file and then filtered out in metadata_retrieval, this is just a safety check
+    if bioproject.metadata_row_count == 0:  # although no metadata should have 0 rows, since those would be condensed to an empty file
+        # and then filtered out in metadata_retrieval, this is just a safety check
         print(f"Skipping {bioproject.name} since its metadata is empty or too small")
         bioproject.delete_metadata()
         return None
@@ -481,11 +489,15 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
                                               if spots.values[0] != 0 else MAP_UNKNOWN
 
     num_skipped_groups = sum([groups_rpm_map[group][1] for group in groups_rpm_map])
-    print(f"{num_skipped_groups} groups will be skipped because they have too few nonzeros")
+    if num_skipped_groups > 0:
+        print(f"{num_skipped_groups} groups out of {len(groups)} will be skipped because they have too few nonzeros")
     global num_tests
     num_tests = (len(groups) - num_skipped_groups) * bioproject.metadata_row_count
     del subset_df, groups
-    print(f"Not found in ref lst: {', '.join(missing_biosamples)} for {bioproject.name} - this implies there was no metadata for this biosample provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI")
+    if missing_biosamples:  # this is an issue due to the raw csvs not having retrieved certain metadata from ncbi, possibly because the metadata is outdated. Therefore,
+        # if this is found, the raw csvs must be remade and then condensed again
+        print(f"Not found in ref lst: {', '.join(missing_biosamples)} for {bioproject.name} - this implies there was no mention of this biosample in the bioproject's metadata "
+              f"file, despite the biosample having been provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI")
     print(f"Built rpm map for {bioproject.name} in {round(time.time() - time_build, 2)} seconds\n")
     print(f"STARTING TESTS FOR {bioproject.name}...\n")
 
@@ -497,7 +509,10 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
             print(f"Not doing tests for {group} because it has too few nonzeros")
         # run tests on this group
         output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, rpm_list, group, bioproject.name, skip)
+        print(f"Finished processing {group} for {bioproject.name}. Mem space for output for this bioproject so far: {sys.getsizeof(output_constructor)}\n")
     bioproject.delete_metadata()
+
+    print(f"Finished processing {bioproject.name} in {round(time.time() - time_start, 3)} seconds\n")
 
     return output_constructor
 
@@ -512,6 +527,10 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # ================
     date = time.asctime().replace(' ', '_').replace(':', '-')
     print(f"Starting MWAS at {date}")
+
+    # clear out the blacklist file
+    with open('blacklist.txt', 'w') as f:
+        f.write('')
 
     # TODO: HASHING THE INPUT FILE
     # hash_code = hash_file(data_file)
@@ -567,6 +586,8 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
             # random.shuffle(biopj_block) is this even necessary since it's iterating over a dict?
             # PROCESS THE BLOCK
             for biopj in biopj_info_dict.keys():
+                global progress
+                progress = 0
                 try:
                     output_text_lines = process_bioproject(biopj_info_dict[biopj], main_df)
                 except Exception as e:
@@ -581,12 +602,19 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                         with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as f:
                             f.write(OUT_COLS_STR % input_info[0] + '\n')
                             f.write(output_text_lines)
+                        print(f"Output file for {biopj} created successfully")
                     except Exception as e:
                         print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
+                        with open('blacklist.txt', 'a') as f:
+                            f.write(f"{biopj} output_error_despite_successful_process\n")
                 elif output_text_lines is not None and output_text_lines == []:
                     print(f"Output file for {biopj} is empty. Not creating a file for it.")
-                else:
+                    with open('blacklist.txt', 'a') as f:
+                        f.write(f"{biopj} empty_output___this_is_strange\n")
+                else:  # output_text_lines is None
                     print(f"There was a problem with making an output file for {biopj}")
+                    with open('blacklist.txt', 'a') as f:
+                        f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided...")
 
         else:  # SCHEDULING
             # TODO: IMPLEMENT SCHEDULING
