@@ -15,16 +15,18 @@ if __name__ == '__main__':
         mwas_outputs_list = []
         with open(mwas_outputs, 'r') as f:
             for line in f:
-                mwas_outputs_list.append(line.strip())
+                mwas_outputs_list.append(f'outputs/{line.strip()}')
     results = ('bioproject,total_biosamples,number_tests,number_permutation_tests,number_metadata_sets,number_groups,num_skipped_groups,'
                'max_memory_usage,avg_memory_usage,avg_perms_memory_usage,total_memory_usage,'
                'max_runtime,avg_runtime,avg_perms_memory_usage,total_runtime\n')
     for mwas_output in mwas_outputs_list:
         df = pd.read_csv(mwas_output)
+        df.groupby('bioproject')
         # split the df into subsets by bioproject and then iterate over them such that each one writes a line to the results
         bioprojects = df['bioproject'].unique()
 
         for bioproject in bioprojects:
+            print(f'Analyzing {bioproject}...')
             df = df[df['bioproject'] == bioproject]
 
             # max, avg, total memory usage
@@ -68,3 +70,7 @@ if __name__ == '__main__':
     except IOError:
         print("Error writing to file, check to make sure it isn't open in another program.")
     print('Done. Check mwas_results_summary.csv for the results.')
+
+
+# this may have caused a spike in PRJNA545312 while I was running it on aws
+
