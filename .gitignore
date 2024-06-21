@@ -10,3 +10,10 @@ main/__pycache__/
 main/csvs/*.csv
 main/tests/metadata_set_maker_tests/failed.txt
 main/tests/metadata_set_maker_tests/passed.txt
+outputs/
+pickles/
+main/blacklist.txt
+main/csvs/
+main/readable_condensed_bioproject_metadata_csvs/
+wip_files/
+main/other_data_files/

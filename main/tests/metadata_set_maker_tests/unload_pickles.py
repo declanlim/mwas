@@ -1,6 +1,22 @@
 import sys
 import pickle
 
+import pandas as pd
+
+if len(sys.argv) == 2:
+    if sys.argv[1].endswith('.pickle'):
+        print("Unloading pickle file...")
+        df = pd.read_pickle(sys.argv[1])
+        df.to_csv(f'{sys.argv[1][:-7]}.csv', index=False)
+        print("Pickle file unloaded")
+        # with open(sys.argv[1], 'rb') as file:
+        #     try:
+        #         bioproj_df = pickle.load(file)
+        #     except Exception as e:
+        #         print(f"Failed to load {sys.argv[1]}: {e}")
+        #         exit(1)
+        #     bioproj_df.to_csv(f'{sys.argv[1][:-7]}.csv', index=False)
+        #     print("Pickle file unloaded")
 if len(sys.argv) < 3:
     print("Usage: python unload_pickles.py <file_list> <csv folder>")
     sys.exit(1)
