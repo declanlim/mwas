@@ -20,16 +20,19 @@ def run():
         # Create a temporary file to store the CSV data
         with NamedTemporaryFile(delete=False, mode='w', suffix='.csv') as temp_csv_file:
             temp_csv_file.write(csv_data)
+            # Get the filepath of the temporary CSV file
+            temp_csv_filepath = temp_csv_file.name
 
-        # Get the filepath of the temporary CSV file
-        temp_csv_filepath = temp_csv_file.name
+        log_file_path = os.path.join(os.path.dirname(temp_csv_filepath), 'log.txt')
 
         # Prepare the subprocess command
-        args = ['arg1', 'arg2']  # Example additional arguments
-        command = ['nohup', 'python3', 'mwas_general.py', temp_csv_filepath] + flags + ['>', 'log.txt', '2>&1', '&']
+        command = ['python3', 'mwas_general.py', temp_csv_filepath] + flags
 
         # Execute the subprocess command with the temporary CSV file as an argument
-        subprocess.run(command, cwd=os.path.dirname(temp_csv_filepath), check=True, shell=True)
+        with open(log_file_path, 'w') as log_file:
+            # Execute the subprocess command with the temporary CSV file as an argument
+            process = subprocess.Popen(command, cwd=os.path.dirname(temp_csv_filepath), stdout=log_file, stderr=log_file)
+            process.communicate()  # Wait for the process to complete
 
         # After processing, remove the temporary CSV file
         os.remove(temp_csv_filepath)

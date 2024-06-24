@@ -77,12 +77,12 @@ BLACKLIST = set()  # list of bioprojects that are too large
 
 # stats constants
 # flags
-IMPLICIT_ZEROS = True  # TODO: implement this flag
+IMPLICIT_ZEROS = True  # TODO: implement this flag for when it's False
 GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
 ALREADY_NORMALIZED = False  # if it's false, then we need to normalize the data by dividing quantifier by spots
 P_VALUE_THRESHOLD = 0.005
-
 ONLY_T_TEST = False  # if True, then only t tests will be run, and other tests, e.g. permutation tests, will not be done
+COMBINE_OUTPUTS = False  # if false, there will ba a separate output file for each bioproject
 
 # constants
 MAP_UNKNOWN = 0  # maybe np.nan
@@ -95,7 +95,14 @@ OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,runtime_sec
 # debugging
 num_tests = 0
 progress = 0
+logging_level = 2  # 0: no logging, 1: minimal logging, 2: verbose logging
 
+
+def log_print(msg: Any, lvl: int = 1) -> None:
+    """Print a message if the logging level is appropriate"""
+    global logging_level
+    if lvl <= logging_level:
+        print(msg)
 
 class BioProjectInfo:
     """Class to store information about a bioproject"""
@@ -131,8 +138,7 @@ class BioProjectInfo:
                 # can't we just use pd.read_pickle(self.metadata_path)?
                 return self.metadata_df
         except Exception as e:
-            print(f"Error in loading metadata for {self.name}")
-            print(e)
+            log_print(f"Error in loading metadata for {self.name}: {e}", 2)
 
     def delete_metadata(self):
         """Delete the metadata pickle file, and the dataframe from memory
@@ -142,7 +148,8 @@ class BioProjectInfo:
         self.metadata_df = None
         if os.path.exists(self.metadata_path):
             os.remove(self.metadata_path)
-            print(f"Deleted metadata pickle file {self.name}.pickle")
+
+            log_print(f"Deleted metadata pickle file {self.name}.pickle")
         self.metadata_path = None
 
 
@@ -152,9 +159,9 @@ def get_bioprojects_df(runs: list) -> pd.DataFrame | None:
     try:
         conn = psycopg2.connect(**CONNECTION_INFO)
         conn.close()  # close the connection because we are only checking if we can connect
-        print(f"Successfully connected to database at {CONNECTION_INFO['host']}")
+        log_print(f"Successfully connected to database at {CONNECTION_INFO['host']}")
     except psycopg2.Error:
-        print(f"Unable to connect to database at {CONNECTION_INFO['host']}")
+        log_print(f"Unable to connect to database at {CONNECTION_INFO['host']}")
 
     runs_str = ", ".join([f"'{run}'" for run in runs])
 
@@ -166,7 +173,7 @@ def get_bioprojects_df(runs: list) -> pd.DataFrame | None:
                 df['spots'] = df['spots'].replace(0, NORMALIZING_CONST)
             return df
         except psycopg2.Error:
-            print("Error in executing query")
+            log_print("Error in executing query")
             return None
 
 
@@ -197,7 +204,7 @@ class MountTmpfs:
                     return True
             return False
         except subprocess.CalledProcessError as e:
-            print(f"Failed to check mounted drives in Unix: {e}")
+            log_print(f"Failed to check mounted drives in Unix: {e}")
             return False
 
     def mount(self) -> None:
@@ -206,10 +213,10 @@ class MountTmpfs:
             if not os.path.exists(PICKLE_DIR):
                 os.mkdir(PICKLE_DIR)
             self.mount_point = None
-            print("Windows does not support tmpfs mounting. Resorting to using working dir folder without mount...")
+            log_print("Windows does not support tmpfs mounting. Resorting to using working dir folder without mount...")
             return
         if not self.is_tmpfs_mounted():
-            print(f"{self.mount_point} was not mounted as tmpfs (RAM), so mounting it now.")
+            log_print(f"{self.mount_point} was not mounted as tmpfs (RAM), so mounting it now.")
             if OS == 'Windows':
                 # Windows-specific mounting
                 pass
@@ -222,7 +229,7 @@ class MountTmpfs:
                 )
             self.is_mounted = True
         else:
-            print(f"{self.mount_point} is already mounted as type tmpfs")
+            log_print(f"{self.mount_point} is already mounted as type tmpfs")
 
         self.is_mounted = True
 
@@ -237,9 +244,9 @@ class MountTmpfs:
                 # Unix-specific unmounting
                 subprocess.run(f"sudo umount -f {self.mount_point}", shell=True)
                 self.is_mounted = False
-                print(f"{self.mount_point} was unmounted")
+                log_print(f"{self.mount_point} was unmounted")
         else:
-            print(f"{self.mount_point} is not mounted as tmpfs")
+            log_print(f"{self.mount_point} is not mounted as tmpfs")
 
 
 def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str, BioProjectInfo]:
@@ -257,10 +264,10 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
         if os.path.exists(PICKLE_DIR):
             file_storage = PICKLE_DIR
         else:
-            print(f"Error: {PICKLE_DIR} does not exist. Exiting.")
+            log_print(f"Error: {PICKLE_DIR} does not exist. Exiting.")
             sys.exit(1)
     elif not os.path.ismount(file_storage):
-        print(f"Error: {file_storage} is not mounted. Exiting.")
+        log_print(f"Error: {file_storage} is not mounted. Exiting.")
         sys.exit(1)
 
     # Create a file with the list of files to check (although this takes an extra loop, s5cmd makes it worth it)
@@ -286,17 +293,17 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
 
             biopj_name = file.split('.')[0]  # get <biopj> from <biopj>.pickle
             if size == 1:
-                print(f"Skipping {biopj_name} because it is empty.")
+                log_print(f"Skipping {biopj_name} because it is empty.")
                 blacklist_file.write(f"{biopj_name} was_empty\n")
             elif size <= MAX_PROJECT_SIZE and biopj_name not in BLACKLIST:
                 write_file.write(f"cp -f {S3_METADATA_DIR}/{file} {file_storage}\n")
                 biopj_info_dict[biopj_name] = BioProjectInfo(biopj_name, f"{file_storage}/{file}", size)
                 total_size += size
             else:
-                print(f"Skipping {biopj_name} because it is too large, with {size} bytes.")
+                log_print(f"Skipping {biopj_name} because it is too large, with {size} bytes.")
                 blacklist_file.write(f"{biopj_name} too_large\n")
             if total_size >= PICKLE_SPACE_LIMIT:
-                print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
+                log_print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
                 break
     os.remove(size_list_file)
 
@@ -347,7 +354,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
         num_false = len(biosample_ref) - num_true
 
         if num_true < 2 or num_false < 2:  # this should never happen, but just in case, we skip
-            print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2')
+            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2', 2)
             continue
 
         # could be optimized?
@@ -377,14 +384,14 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
             test_key = (num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false)
             if test_key in reusable_results:
                 fold_change, test_statistic, p_value, status = reusable_results[test_key]
-                print(f"Reusing results for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
+                log_print(f"Reusing results for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}", 2)
             else:
                 # calculate fold change and check if any values are nan
                 fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
 
                 # if there are at least 4 values in each group, run a permutation test, otherwise run a t test
                 try:
-                    print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
+                    log_print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}", 2)
                     if min(num_false, num_true) < 4 or ONLY_T_TEST:
                         # scipy t test
                         status = 't_test'
@@ -399,7 +406,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
                                                      vectorized=True)
                         p_value, test_statistic = res.pvalue, res.statistic
                 except Exception as e:
-                    print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}')
+                    log_print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}', 2)
                     continue
 
                 reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
@@ -413,7 +420,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
                     true_biosamples, false_biosamples = false_biosamples, true_biosamples
             else:
                 true_biosamples, false_biosamples = '', ''
-            print(f"Finished with p-value: {p_value}")
+            log_print(f"Finished with p-value: {p_value}", 2)
 
         _, peak_memory = tracemalloc.get_traced_memory()
         tracemalloc.stop()
@@ -424,8 +431,8 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
         result += this_result
         global progress
         progress += int(not skip_tests)
-        print(this_result)
-        print(f"Progress: {progress} tests completed of {num_tests} tests completed for {bioproject_name}. ({round(100 * (progress/num_tests), 3)}%)\n")
+        log_print(this_result, 2)
+        log_print(f"Progress: {progress} tests completed of {num_tests} tests completed for {bioproject_name}. ({round(100 * (progress/num_tests), 3)}%)\n")
 
     return result
 
@@ -433,13 +440,13 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
 def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.DataFrame | None:
     """Process the given bioproject, and return an output file - concatenation of several group outputs
     """
-    print(f"Processing {bioproject.name}...")
+    log_print(f"Processing {bioproject.name}...")
     bioproject.load_metadata()  # access this df as bioproject.metadata_df
     time_start = time.time()
 
     if bioproject.metadata_row_count == 0:  # although no metadata should have 0 rows, since those would be condensed to an empty file
         # and then filtered out in metadata_retrieval, this is just a safety check
-        print(f"Skipping {bioproject.name} since its metadata is empty or too small")
+        log_print(f"Skipping {bioproject.name} since its metadata is empty or too small")
         bioproject.delete_metadata()
         return None
     num_biosamples = len(bioproject.metadata_ref_lst)
@@ -489,29 +496,29 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
 
     num_skipped_groups = sum([groups_rpm_map[group][1] for group in groups_rpm_map])
     if num_skipped_groups > 0:
-        print(f"{num_skipped_groups} groups out of {len(groups)} will be skipped because they have too few nonzeros")
+        log_print(f"{num_skipped_groups} groups out of {len(groups)} will be skipped because they have too few nonzeros")
     global num_tests
     num_tests = (len(groups) - num_skipped_groups) * bioproject.metadata_row_count
     del subset_df, groups
     if missing_biosamples:  # this is an issue due to the raw csvs not having retrieved certain metadata from ncbi, possibly because the metadata is outdated. Therefore,
         # if this is found, the raw csvs must be remade and then condensed again
-        print(f"Not found in ref lst: {', '.join(missing_biosamples)} for {bioproject.name} - this implies there was no mention of this biosample in the bioproject's metadata "
+        log_print(f"Not found in ref lst: {', '.join(missing_biosamples)} for {bioproject.name} - this implies there was no mention of this biosample in the bioproject's metadata "
               f"file, despite the biosample having been provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI")
-    print(f"Built rpm map for {bioproject.name} in {round(time.time() - time_build, 2)} seconds\n")
-    print(f"STARTING TESTS FOR {bioproject.name}...\n")
+    log_print(f"Built rpm map for {bioproject.name} in {round(time.time() - time_build, 2)} seconds\n")
+    log_print(f"STARTING TESTS FOR {bioproject.name}...\n")
 
     # group processing
     output_constructor = ''
     for group in groups_rpm_map:
         rpm_list, skip = groups_rpm_map[group]
         if skip:
-            print(f"Not doing tests for {group} because it has too few nonzeros")
+            log_print(f"Not doing tests for {group} because it has too few nonzeros")
         # run tests on this group
         output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, rpm_list, group, bioproject.name, skip)
-        print(f"Finished processing {group} for {bioproject.name}. Mem space for output for this bioproject so far: {sys.getsizeof(output_constructor)}\n")
+        log_print(f"Finished processing {group} for {bioproject.name}. Mem space for output for this bioproject so far: {sys.getsizeof(output_constructor)}\n")
     bioproject.delete_metadata()
 
-    print(f"Finished processing {bioproject.name} in {round(time.time() - time_start, 3)} seconds\n")
+    log_print(f"Finished processing {bioproject.name} in {round(time.time() - time_start, 3)} seconds\n")
 
     return output_constructor
 
@@ -525,7 +532,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # PRE-PROCESSING
     # ================
     date = time.asctime().replace(' ', '_').replace(':', '-')
-    print(f"Starting MWAS at {date}")
+    log_print(f"Starting MWAS at {date}")
 
     # clear out the blacklist file
     with open('blacklist.txt', 'w') as f:
@@ -590,7 +597,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                 try:
                     output_text_lines = process_bioproject(biopj_info_dict[biopj], main_df)
                 except Exception as e:
-                    print(f"Error processing bioproject {biopj}: {e}")
+                    log_print(f"Error processing bioproject {biopj}: {e}", 2)
                     biopj_info_dict[biopj].delete_metadata()
                     continue
 
@@ -601,17 +608,17 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                         with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as f:
                             f.write(OUT_COLS_STR % input_info[0] + '\n')
                             f.write(output_text_lines)
-                        print(f"Output file for {biopj} created successfully")
+                        log_print(f"Output file for {biopj} created successfully")
                     except Exception as e:
-                        print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
+                        log_print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
                         with open('blacklist.txt', 'a') as f:
                             f.write(f"{biopj} output_error_despite_successful_process\n")
                 elif output_text_lines is not None and output_text_lines == []:
-                    print(f"Output file for {biopj} is empty. Not creating a file for it.")
+                    log_print(f"Output file for {biopj} is empty. Not creating a file for it.")
                     with open('blacklist.txt', 'a') as f:
                         f.write(f"{biopj} empty_output___this_is_strange\n")
                 else:  # output_text_lines is None
-                    print(f"There was a problem with making an output file for {biopj}")
+                    log_print(f"There was a problem with making an output file for {biopj}")
                     with open('blacklist.txt', 'a') as f:
                         f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided...")
 
@@ -637,7 +644,7 @@ def cleanup(mount_tmpfs: MountTmpfs) -> Any:
     """
     if os.path.exists(PICKLE_DIR):
         rmtree(PICKLE_DIR)
-        print(f"Cleared out all files in {PICKLE_DIR}")
+        log_print(f"Cleared out all files in {PICKLE_DIR}")
     if platform.system() == 'Linux':
         mount_tmpfs.unmount()
 
@@ -662,6 +669,11 @@ if __name__ == '__main__':
         print("Usage: python mwas_general.py data_file.csv")
         sys.exit(1)
     elif sys.argv[1].endswith('.csv'):
+        if '--suppress-logging' in sys.argv:
+            logging_level = 1
+        if '--no-logging' in sys.argv:
+            logging_level = 0
+
         try:  # reading the input file
             input_df = pd.read_csv(sys.argv[1])  # arg1 is a file path
             # rename group and quantifier columns to standard names, and also save original names
@@ -687,7 +699,7 @@ if __name__ == '__main__':
         mount_tmpfs = MountTmpfs()
         mount_tmpfs.mount()
         if not mount_tmpfs.is_mounted:
-            print("Did not mount tmpfs, likely because this is a Windows system. Using working directory instead.")
+            log_print("Did not mount tmpfs, likely because this is a Windows system. Using working directory instead.")
         # CREATE OUTPUT DIRECTORY
         if not os.path.exists(OUTPUT_DIR_DISK):
             os.mkdir(OUTPUT_DIR_DISK)
@@ -695,8 +707,8 @@ if __name__ == '__main__':
         register(cleanup, mount_tmpfs)  # handle cleanup on exit
 
         # RUN MWAS
+        print("Running MWAS...")
         run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs)
-
         print("MWAS completed successfully")
 
         # UNMOUNT TMPFS
