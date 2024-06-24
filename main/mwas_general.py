@@ -7,8 +7,7 @@ import platform
 import subprocess
 import pickle
 import time
-# import warnings
-# import logging
+import tracemalloc
 from random import shuffle
 from atexit import register
 from shutil import rmtree
@@ -19,8 +18,6 @@ import psycopg2
 import pandas as pd
 import numpy as np
 import scipy.stats as stats
-
-import tracemalloc
 
 # sql constants
 SERRATUS_CONNECTION_INFO = {
@@ -337,6 +334,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
     # num_metasets = metadata_df.shape[0]
     num_biosamples = len(biosample_ref)
     result = ''
+    reusable_results = {}  # save results while a group is processed, so we can avoid recomputing them
 
     for _, row in metadata_df.iterrows():
         test_start_time = time.time()
@@ -376,40 +374,41 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
             true_biosamples, false_biosamples = '', ''
             status = 'skipped_statistical_testing'
         else:
-            status = ''
-            # calculate fold change and check if any values are nan
-            fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
+            test_key = (num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false)
+            if test_key in reusable_results:
+                fold_change, test_statistic, p_value, status = reusable_results[test_key]
+                print(f"Reusing results for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
+            else:
+                # calculate fold change and check if any values are nan
+                fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
 
-            # if there are at least 4 values in each group, run a permutation test
-            # otherwise run a t test
-            try:
-                print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
-                if min(num_false, num_true) < 4 or ONLY_T_TEST:
-                    # scipy t test
-                    status = 't_test'
-                    test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
-                                                                         mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
-                                                                         equal_var=False)
-                else:
-                    # run a permutation test
-                    status = 'permutation_test'
-                    res = stats.permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=10000,
-                                                 vectorized=True)
-                    p_value, test_statistic = res.pvalue, res.statistic
-            except Exception as e:
-                print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}')
-                continue
+                # if there are at least 4 values in each group, run a permutation test, otherwise run a t test
+                try:
+                    print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}")
+                    if min(num_false, num_true) < 4 or ONLY_T_TEST:
+                        # scipy t test
+                        status = 't_test'
+                        test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
+                                                                             mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
+                                                                             equal_var=False)
+                    else:
+                        # run a permutation test
+                        status = 'permutation_test'
+                        num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
+                        res = stats.permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
+                                                     vectorized=True)
+                        p_value, test_statistic = res.pvalue, res.statistic
+                except Exception as e:
+                    print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}')
+                    continue
+
+                reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
 
             if p_value < P_VALUE_THRESHOLD:
                 status += '; significant'
-                if num_true < 1000:
-                    true_biosamples = '; '.join([biosample_ref[i] for i in index_list])
-                else:
-                    true_biosamples = 'too many biosamples to list'
-                if num_false < 1000:
-                    false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list])
-                else:
-                    false_biosamples = 'too many biosamples to list'
+                too_many = 'too many biosamples to list'
+                true_biosamples = '; '.join([biosample_ref[i] for i in index_list]) if num_true < 1000 else too_many
+                false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list]) if num_false < 1000 else too_many
                 if not index_is_inlcude:
                     true_biosamples, false_biosamples = false_biosamples, true_biosamples
             else:
