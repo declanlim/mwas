@@ -8,6 +8,7 @@ import subprocess
 import pickle
 import time
 import tracemalloc
+import logging
 from random import shuffle
 from atexit import register
 from shutil import rmtree
@@ -96,13 +97,19 @@ OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,runtime_sec
 num_tests = 0
 progress = 0
 logging_level = 2  # 0: no logging, 1: minimal logging, 2: verbose logging
+use_logger = False
+logging.basicConfig(level=logging.INFO)
 
 
 def log_print(msg: Any, lvl: int = 1) -> None:
     """Print a message if the logging level is appropriate"""
-    global logging_level
+    global logging_level, use_logger
     if lvl <= logging_level:
-        print(msg)
+        if use_logger:
+            logging.info(msg)
+        else:
+            print(msg)
+
 
 class BioProjectInfo:
     """Class to store information about a bioproject"""
@@ -660,15 +667,19 @@ def cleanup(mount_tmpfs: MountTmpfs) -> Any:
 #     return [x for x in tracemalloc.take_snapshot().traces._traces if 'mwas_general' in x[2][0][0]]
 
 
-def main(args: list[str], as_main=False) -> int | None:
+def main(args: list[str], using_logging=False) -> int | None:
     """Main function to run MWAS on the given data file"""
     num_args = len(args)
     time_start = time.time()
+    if using_logging:
+        global use_logger
+        use_logger = True
+    log_print("Starting MWAS (handling arguments)...", 0)
 
     # Check if the correct number of arguments is provided
     if num_args < 2 or args[1] in ('-h', '--help'):
-        print("Usage: python mwas_general.py data_file.csv")
-        sys.exit(1)
+        log_print("Usage: python mwas_general.py data_file.csv", 0)
+        return 1
     elif args[1].endswith('.csv'):
         global logging_level
         if '--suppress-logging' in args:
@@ -686,25 +697,16 @@ def main(args: list[str], as_main=False) -> int | None:
 
             # assume it has three columns: run, group, quantifier. And the group and quantifier columns have special names
             if len(input_df.columns) != 3:
-                print("Data file must have three columns in this order: <run>, <group>, <quantifier>")
-                if as_main:
-                    sys.exit(1)
-                else:
-                    return 1
+                log_print("Data file must have three columns in this order: <run>, <group>, <quantifier>", 0)
+                return 1
             # check if run and group contain string values and quantifier contains numeric values
             if (input_df['run'].dtype != 'object' or input_df['group'].dtype != 'object'
                     or input_df['quantifier'].dtype not in ('float64', 'int64')):
-                print("run and group column must contain string values, and quantifier column must contain numeric values")
-                if as_main:
-                    sys.exit(1)
-                else:
-                    return 1
-        except FileNotFoundError:
-            print("File not found")
-            if as_main:
-                sys.exit(1)
-            else:
+                log_print("run and group column must contain string values, and quantifier column must contain numeric values", 0)
                 return 1
+        except FileNotFoundError:
+            log_print("File not found", 0)
+            return 1
 
         # MOUNT TMPFS
         mount_tmpfs = MountTmpfs()
@@ -718,25 +720,21 @@ def main(args: list[str], as_main=False) -> int | None:
         register(cleanup, mount_tmpfs)  # handle cleanup on exit
 
         # RUN MWAS
-        print("Running MWAS...")
+        log_print("Running MWAS...", 0)
         run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs)
-        print("MWAS completed successfully")
+        log_print("MWAS completed successfully", 0)
 
         # UNMOUNT TMPFS
         mount_tmpfs.unmount()
         # print(display_memory())
-        print(f"Time taken: {round((time.time() - time_start) / 60, 3)} minutes")
-        if as_main:
-            sys.exit(0)
-        else:
-            return 0
+        log_print(f"Time taken: {round((time.time() - time_start) / 60, 3)} minutes", 0)
+        return 0
+
     else:
-        print("Invalid arguments")
-        if as_main:
-            sys.exit(1)
-        else:
-            return 1
+        log_print("Invalid arguments", 0)
+        return 1
 
 
 if __name__ == '__main__':
-    main(sys.argv, True)
+    status = main(sys.argv, False)
+    sys.exit(status)
