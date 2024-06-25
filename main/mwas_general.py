@@ -669,7 +669,7 @@ def main(args: list[str], as_main=False) -> int | None:
     if num_args < 2 or args[1] in ('-h', '--help'):
         print("Usage: python mwas_general.py data_file.csv")
         sys.exit(1)
-    elif sys.argv[1].endswith('.csv'):
+    elif args[1].endswith('.csv'):
         global logging_level
         if '--suppress-logging' in args:
             logging_level = 1
