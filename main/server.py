@@ -1,8 +1,11 @@
 """server for other users to run mwas remotely"""
+import sys
+
 from flask import Flask, request, jsonify
 import os
 import subprocess
 from tempfile import NamedTemporaryFile
+import mwas_general
 
 app = Flask(__name__)
 
@@ -23,25 +26,18 @@ def run():
             # Get the filepath of the temporary CSV file
             temp_csv_filepath = temp_csv_file.name
 
-        log_file_path = os.path.join(os.path.dirname(temp_csv_filepath), 'log.txt')
-
         # Prepare the subprocess command
-        command = ['python3', 'mwas_general.py', temp_csv_filepath] + flags
-
-        # Execute the subprocess command with the temporary CSV file as an argument
-        with open(log_file_path, 'w') as log_file:
-            # Execute the subprocess command with the temporary CSV file as an argument
-            process = subprocess.Popen(command, cwd=os.path.dirname(temp_csv_filepath), stdout=log_file, stderr=log_file)
-            process.communicate()  # Wait for the process to complete
+        status = mwas_general.main([temp_csv_filepath] + flags, False)
 
         # After processing, remove the temporary CSV file
         os.remove(temp_csv_filepath)
 
-        return jsonify({"message": "MWAS processed successfully"})
+        return jsonify({"message": f"MWAS processed successfully, with exit code {status}"})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':
+    print("Server starting...")
     app.run(host='0.0.0.0', port=5000)

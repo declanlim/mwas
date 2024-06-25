@@ -660,22 +660,24 @@ def cleanup(mount_tmpfs: MountTmpfs) -> Any:
 #     return [x for x in tracemalloc.take_snapshot().traces._traces if 'mwas_general' in x[2][0][0]]
 
 
-if __name__ == '__main__':
-    num_args = len(sys.argv)
+def main(args: list[str], as_main=False) -> int | None:
+    """Main function to run MWAS on the given data file"""
+    num_args = len(args)
     time_start = time.time()
 
     # Check if the correct number of arguments is provided
-    if num_args < 2 or sys.argv[1] in ('-h', '--help'):
+    if num_args < 2 or args[1] in ('-h', '--help'):
         print("Usage: python mwas_general.py data_file.csv")
         sys.exit(1)
     elif sys.argv[1].endswith('.csv'):
-        if '--suppress-logging' in sys.argv:
+        global logging_level
+        if '--suppress-logging' in args:
             logging_level = 1
-        if '--no-logging' in sys.argv:
+        if '--no-logging' in args:
             logging_level = 0
 
         try:  # reading the input file
-            input_df = pd.read_csv(sys.argv[1])  # arg1 is a file path
+            input_df = pd.read_csv(args[1])  # arg1 is a file path
             # rename group and quantifier columns to standard names, and also save original names
             group_by, quantifying_by = input_df.columns[1], input_df.columns[2]
             input_df.rename(columns={
@@ -685,15 +687,24 @@ if __name__ == '__main__':
             # assume it has three columns: run, group, quantifier. And the group and quantifier columns have special names
             if len(input_df.columns) != 3:
                 print("Data file must have three columns in this order: <run>, <group>, <quantifier>")
-                sys.exit(1)
+                if as_main:
+                    sys.exit(1)
+                else:
+                    return 1
             # check if run and group contain string values and quantifier contains numeric values
             if (input_df['run'].dtype != 'object' or input_df['group'].dtype != 'object'
                     or input_df['quantifier'].dtype not in ('float64', 'int64')):
                 print("run and group column must contain string values, and quantifier column must contain numeric values")
-                sys.exit(1)
+                if as_main:
+                    sys.exit(1)
+                else:
+                    return 1
         except FileNotFoundError:
             print("File not found")
-            sys.exit(1)
+            if as_main:
+                sys.exit(1)
+            else:
+                return 1
 
         # MOUNT TMPFS
         mount_tmpfs = MountTmpfs()
@@ -715,7 +726,17 @@ if __name__ == '__main__':
         mount_tmpfs.unmount()
         # print(display_memory())
         print(f"Time taken: {round((time.time() - time_start) / 60, 3)} minutes")
-        sys.exit(0)
+        if as_main:
+            sys.exit(0)
+        else:
+            return 0
     else:
         print("Invalid arguments")
-        sys.exit(1)
+        if as_main:
+            sys.exit(1)
+        else:
+            return 1
+
+
+if __name__ == '__main__':
+    main(sys.argv, True)
