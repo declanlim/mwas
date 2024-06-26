@@ -16,9 +16,9 @@ if __name__ == '__main__':
         with open(mwas_outputs, 'r') as f:
             for line in f:
                 mwas_outputs_list.append(f'outputs/{line.strip()}')
-    results = ('bioproject,total_biosamples,number_tests,number_permutation_tests,number_metadata_sets,number_groups,num_skipped_groups,'
+    results = ('bioproject,weight_(num_biosamp*num_perm_tests),num_biosamples,number_tests,number_permutation_tests,number_metadata_sets,number_groups,num_skipped_groups,'
                'max_memory_usage,avg_memory_usage,avg_perms_memory_usage,total_memory_usage,'
-               'max_runtime,avg_runtime,avg_perms_memory_usage,total_runtime\n')
+               'max_runtime,avg_runtime,avg_perms_runtime,total_runtime\n')
     for mwas_output in mwas_outputs_list:
         df = pd.read_csv(mwas_output)
         df.groupby('bioproject')
@@ -61,11 +61,14 @@ if __name__ == '__main__':
             # percent of tests that are permutation tests
             num_permutations = df[df['status'].str.contains('permutation')].shape[0]
 
-            results += f'{bioproject},{total_biosamples},{total_tests},{num_permutations},{number_metadata_sets},{number_groups},{number_skipped_groups},' \
+            # weight
+            weight = total_biosamples * num_permutations
+
+            results += f'{bioproject},{weight},{total_biosamples},{total_tests},{num_permutations},{number_metadata_sets},{number_groups},{number_skipped_groups},' \
                        f'{max_memory_usage},{avg_memory_usage},{avg_memory_usage_permutations},{total_memory_usage},' \
                        f'{max_runtime},{avg_runtime},{avg_runtime_permutations},{total_runtime}\n'
     try:
-        with open('mwas_results_summary.csv', 'w') as f:
+        with open('other_data_files/mwas_results_summary.csv', 'w') as f:
             f.write(results)
     except IOError:
         print("Error writing to file, check to make sure it isn't open in another program.")
@@ -73,4 +76,3 @@ if __name__ == '__main__':
 
 
 # this may have caused a spike in PRJNA545312 while I was running it on aws
-
