@@ -357,20 +357,25 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
         index_is_inlcude = row['include?']
         index_list = row['biosample_index_list']
 
-        num_true = len(index_list) if index_is_inlcude else num_biosamples - len(index_list)
-        num_false = len(biosample_ref) - num_true
-
-        if num_true < 2 or num_false < 2:  # this should never happen, but just in case, we skip
-            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2', 2)
-            continue
+        # deprecated
+        # num_true = len(index_list) if index_is_inlcude else num_biosamples - len(index_list)
+        # num_false = len(biosample_ref) - num_true
 
         # could be optimized?
         true_rpm, false_rpm = [], []
         for i, rpm_val in enumerate(group_rpm_lst):
+            if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
+                continue
             if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
                 true_rpm.append(rpm_val)
             else:
                 false_rpm.append(rpm_val)
+
+        num_true, num_false = len(true_rpm), len(false_rpm)
+
+        if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
+            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2', 2)
+            continue
 
         # calculate desecriptive stats
         # NON CORRECTED VALUES
@@ -460,18 +465,29 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
 
     # get subset of main_df that belongs to this bioproject
     subset_df = main_df[main_df['bio_project'] == bioproject.name]
-    # subset_df = subset_df[subset_df['bio_sample'].isin(bioproject.metadata_ref_lst)]
 
     # rpm map building
     time_build = time.time()
     groups = subset_df['group'].unique()
-    groups_rpm_map = {group: [np.zeros(num_biosamples, float), False] for group in groups}  # remember, numpy arrays work better with preallocation
+    global MAP_UNKNOWN
+    if not IMPLICIT_ZEROS:
+        MAP_UNKNOWN = -1  # to allow for user provided 0, we must use a negative number to indicate unknown (user should never provide a negative number)
+
+    # groups_rpm_map is a dictionary with keys as groups and values as a list of two items: the rpm list for the group and a boolean - True => skip the group
+    groups_rpm_map = {group: [np.full(num_biosamples, MAP_UNKNOWN, float), False] for group in groups}  # remember, numpy arrays work better with preallocation
+
     missing_biosamples = set()
     for g in groups:
         group_subset = subset_df[subset_df['group'] == g]
-        if GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
-            num_nonzeros = group_subset['quantifier'].count()
-            if num_nonzeros < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
+
+        if IMPLICIT_ZEROS:
+            if GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
+                num_provided = group_subset['quantifier'].count()
+                if num_provided < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
+                    groups_rpm_map[g][1] = True
+        else:
+            num_provided = group_subset['quantifier'].count()
+            if num_provided < 4:  # because you need at least 4 values to run a test
                 groups_rpm_map[g][1] = True
 
         for biosample in group_subset['bio_sample'].unique():
@@ -510,7 +526,7 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
     if missing_biosamples:  # this is an issue due to the raw csvs not having retrieved certain metadata from ncbi, possibly because the metadata is outdated. Therefore,
         # if this is found, the raw csvs must be remade and then condensed again
         log_print(f"Not found in ref lst: {', '.join(missing_biosamples)} for {bioproject.name} - this implies there was no mention of this biosample in the bioproject's metadata "
-              f"file, despite the biosample having been provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI")
+                  f"file, despite the biosample having been provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI", 2)
     log_print(f"Built rpm map for {bioproject.name} in {round(time.time() - time_build, 2)} seconds\n")
     log_print(f"STARTING TESTS FOR {bioproject.name}...\n")
 
@@ -572,6 +588,10 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     shuffle(bioprojects_list)
     num_bioprojects = len(bioprojects_list)
     num_blocks = max(1, num_bioprojects // BLOCK_SIZE)
+
+    # TODO: time & space estimator: get subsets of main_df for all bioprojects to get num groups and num skipped groups
+    # and also query all bioprojects to mwas_database to get ref_list length, num metadata tests, and other stuff etc
+    # use that to estimate the number of tests that will be run - useful for scheduling and giving user an idea of how long it will take
 
     # ================
     # PROCESSING
@@ -644,6 +664,19 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # ================
     # POST-PROCESSING
     # ================
+    # concatenate all the output files in the block into one csv (spans multiple bioprojects)
+    if COMBINE_OUTPUTS:
+        for file in os.listdir(OUTPUT_DIR_DISK):
+            # make sure the file's date is the same as the date mwas started
+            try:
+                if file.endswith('.csv') and file.split('output_')[-1].split('.')[0] == date:
+                    with open(f"{OUTPUT_DIR_DISK}/{file}", 'r') as f:
+                        with open(f"{OUTPUT_DIR_DISK}/combined_output_{date}.csv", 'a') as combined:
+                            combined.write(f.read())
+                    os.remove(f"{OUTPUT_DIR_DISK}/{file}")
+            except Exception as e:  # string splitting error or file not found
+                log_print(f"Error while combining output files with: {e}")
+                continue
 
 
 def cleanup(mount_tmpfs: MountTmpfs) -> Any:
@@ -681,11 +714,31 @@ def main(args: list[str], using_logging=False) -> int | None:
         log_print("Usage: python mwas_general.py data_file.csv", 0)
         return 1
     elif args[1].endswith('.csv'):
-        global logging_level
+        global logging_level, IMPLICIT_ZEROS, GROUP_NONZEROS_ACCEPTANCE_THRESHOLD, ALREADY_NORMALIZED, P_VALUE_THRESHOLD, ONLY_T_TEST, COMBINE_OUTPUTS
         if '--suppress-logging' in args:
             logging_level = 1
         if '--no-logging' in args:
             logging_level = 0
+        if '--explicit-zeros' in args or '--explicit-zeroes' in args:
+            IMPLICIT_ZEROS = False
+        if '--combine-outputs' in args:  # TODO: test
+            COMBINE_OUTPUTS = True
+        if '--t-test-only' in args:
+            ONLY_T_TEST = True
+        if '--already-normalized' in args:  # TODO: test
+            ALREADY_NORMALIZED = True
+        if '--p-value-threshold' in args:  # TODO: test
+            try:
+                P_VALUE_THRESHOLD = float(args[args.index('--p-value-threshold') + 1])
+            except Exception as e:
+                log_print(f"Error in setting p-value threshold: {e}", 0)
+                return 1
+        if '--group-nonzero-threshold' in args:  # TODO: test
+            try:
+                GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(args[args.index('--group-nonzero-threshold') + 1])
+            except Exception as e:
+                log_print(f"Error in setting group nonzeros threshold: {e}", 0)
+                return 1
 
         try:  # reading the input file
             input_df = pd.read_csv(args[1])  # arg1 is a file path
