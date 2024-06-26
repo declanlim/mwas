@@ -4,14 +4,17 @@ Instructions for sending requests to the MWAS server:
 2) convert your csv into a json file so it can be attached to the request (as the request's **data**)
 3) The Uri for the request should be: "http://ec2-75-101-194-81.compute-1.amazonaws.com:5000/run_mwas"
 4) Send the request (POST request).
-    On Windows, you can follow these steps in the Powershell
-        $jsonData = Import-Csv -Path <path to your csv> | ConvertTo-Json
-        $url = "http://ec2-75-101-194-81.compute-1.amazonaws.com:5000/run_mwas"
-        $response = Invoke-WebRequest -Uri $url -Method Post -Body $jsonData -ContentType "application/json" -UseBasicParsing
-   Then, mwas should start running. As of now, the user won't be able to know the actual MWAS output or the progress while it's being processed, but you can check $response to check if it finished/how it exited (if a problem did occur).
-       
+On Windows, you can follow these steps in the Powershell
 
-(THIS README NEEDS TO BE UPDATED)
+   $jsonData = Import-Csv -Path {path to your csv} | ConvertTo-Json <br />
+   $url = "http://ec2-75-101-194-81.compute-1.amazonaws.com:5000/run_mwas" <br />
+   $response = Invoke-WebRequest -Uri $url -Method Post -Body $jsonData -ContentType "application/json" -UseBasicParsing <br />
+
+Then, mwas should start running. As of now, the user won't be able to know the actual MWAS output or the progress while it's being processed, but you can check $response to check if it finished/how it exited (if a problem did occur).
+
+ <br />
+  <br />
+(THE REST OF THIS README NEEDS TO BE UPDATED)
 
 Metadata wide association studies are statistical studies that find correlations between a given observation and metadata from the NCBI BioSample database (ADD LINK). Using extracted information from the BioSample Database, t-tests or permutation tests are used to calculate the statistical significance of any correlations in the data. 
 
