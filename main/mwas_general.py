@@ -752,6 +752,12 @@ def main(args: list[str], using_logging=False) -> int | None:
             if len(input_df.columns) != 3:
                 log_print("Data file must have three columns in this order: <run>, <group>, <quantifier>", 0)
                 return 1
+
+            # attempt to correct column types so the next if block doesn't exit us
+            input_df['run'] = input_df['run'].astype(str)
+            input_df['group'] = input_df['group'].astype(str)
+            input_df['quantifier'] = pd.to_numeric(input_df['quantifier'], errors='coerce')
+
             # check if run and group contain string values and quantifier contains numeric values
             if (input_df['run'].dtype != 'object' or input_df['group'].dtype != 'object'
                     or input_df['quantifier'].dtype not in ('float64', 'int64')):
