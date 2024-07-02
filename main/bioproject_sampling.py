@@ -1,3 +1,5 @@
+"""synthetic input creation - used to test mwas. samples n bioprojects from bins corresponding to file sizes of logarithmic scale, then make synthetic group & quantification values
+then from this, we get our mock input for mwas"""
 import sys
 import random
 import psycopg2

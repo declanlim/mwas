@@ -16,7 +16,8 @@ def run():
     """run mwas"""
     try:
         # Receive CSV data and flags from the request
-        flags = request.args.getlist('flag')
+        flags = request.json.get('flags')
+        destination = request.json.get('dest')
         length = len(request.data)
         logging.info("Received request with data: %s ... (and %s more chars)", request.data[:20], length - 20)
         logging.info("Received flags: %s", flags)
@@ -24,7 +25,7 @@ def run():
         # Create a temporary file to store the CSV data
         with open('temp_input_from_request.csv', mode='w') as temp_csv_file:
             try:
-                data = request.data.decode('utf-8')
+                data = request.json.get('data')
                 json_data = json.loads(data)
             except Exception as e:
                 logging.error("Error decoding data: %s", e)
@@ -42,7 +43,7 @@ def run():
 
         # execute mwas
         try:
-            status = mwas_general.main(['server.py', temp_csv_filepath] + flags, True)
+            status = mwas_general.main(['server.py', temp_csv_filepath, "--s3-storing", destination] + flags, True)
         except Exception as e:
             status = 1
             logging.error("Error running MWAS: %s", e)

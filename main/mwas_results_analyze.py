@@ -73,6 +73,3 @@ if __name__ == '__main__':
     except IOError:
         print("Error writing to file, check to make sure it isn't open in another program.")
     print('Done. Check mwas_results_summary.csv for the results.')
-
-
-# this may have caused a spike in PRJNA545312 while I was running it on aws

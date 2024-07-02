@@ -303,6 +303,9 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
             if size == 1:
                 log_print(f"Skipping {biopj_name} because it is empty.")
                 blacklist_file.write(f"{biopj_name} was_empty\n")
+
+                # TODO: also ignore metadata files that have less than 4 biosamples - we'll need to have queried the mwas database for this
+
             elif size <= MAX_PROJECT_SIZE and biopj_name not in BLACKLIST:
                 write_file.write(f"cp -f {S3_METADATA_DIR}/{file} {file_storage}\n")
                 biopj_info_dict[biopj_name] = BioProjectInfo(biopj_name, f"{file_storage}/{file}", size)
@@ -352,6 +355,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
     reusable_results = {}  # save results while a group is processed, so we can avoid recomputing them
 
     for _, row in metadata_df.iterrows():
+        test_start_time = 0
         if PERFOMANCE_STATS:
             test_start_time = time.time()
             tracemalloc.start()
@@ -460,7 +464,7 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
 def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.DataFrame | None:
     """Process the given bioproject, and return an output file - concatenation of several group outputs
     """
-    log_print(f"Processing {bioproject.name}...")
+    log_print(f"---------------------\nProcessing {bioproject.name}...")
     bioproject.load_metadata()  # access this df as bioproject.metadata_df
     time_start = time.time()
 
@@ -546,7 +550,8 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
             log_print(f"Not doing tests for {group} because it has too few nonzeros")
         # run tests on this group
         output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, rpm_list, group, bioproject.name, skip)
-        log_print(f"Finished processing {group} for {bioproject.name}. Mem space for output for this bioproject so far: {sys.getsizeof(output_constructor)}\n")
+        extra_info = f'Mem space for output for this bioproject so far: {sys.getsizeof(output_constructor)}' if PERFOMANCE_STATS else ''
+        log_print(f"Finished processing {group} for {bioproject.name}.{extra_info}\n")
     bioproject.delete_metadata()
 
     log_print(f"Finished processing {bioproject.name} in {round(time.time() - time_start, 3)} seconds\n")
@@ -641,8 +646,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                     try:
                         # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
                         with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as f:
-                            if PERFOMANCE_STATS:
-                                extra_info = 'runtime_seconds,memory_usage_bytes,'
+                            extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
                             f.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
                             f.write(output_text_lines)
                         log_print(f"Output file for {biopj} created successfully")
@@ -684,8 +688,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                     with open(f"{OUTPUT_DIR_DISK}/{file}", 'r') as f:
                         with open(f"{OUTPUT_DIR_DISK}/mwas_output{date}.csv", 'a') as combined:
                             if not header_is_written:
-                                if PERFOMANCE_STATS:
-                                    extra_info = 'runtime_seconds,memory_usage_bytes,'
+                                extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
                                 combined.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
                                 header_is_written = True
                             next(f)  # ignore first line
@@ -758,6 +761,14 @@ def main(args: list[str], using_logging=False) -> int | None:
                 return 1
         if '--performance-stats' in args:  # TODO: test
             PERFOMANCE_STATS = True
+        # s3 storing
+        if '--s3-storing' in args:
+            try:
+                S3_STORING = True
+                S3_OUTPUT_DIR = args[args.index('--s3-storing') + 1]
+            except Exception as e:
+                log_print(f"Error in setting s3 output directory: {e}", 0)
+                return 1
 
         try:  # reading the input file
             input_df = pd.read_csv(args[1])  # arg1 is a file path
