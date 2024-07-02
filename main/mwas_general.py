@@ -84,6 +84,7 @@ ALREADY_NORMALIZED = False  # if it's false, then we need to normalize the data 
 P_VALUE_THRESHOLD = 0.005
 ONLY_T_TEST = False  # if True, then only t tests will be run, and other tests, e.g. permutation tests, will not be done
 COMBINE_OUTPUTS = False  # if false, there will ba a separate output file for each bioproject
+PERFOMANCE_STATS = False
 
 # constants
 MAP_UNKNOWN = 0  # maybe np.nan
@@ -91,7 +92,7 @@ NORMALIZING_CONST = 1000000  # 1 million
 
 # OUT_COLS = ['bioproject', 'group', 'metadata_field', 'metadata_value', 'status', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
 #             'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value']
-OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,runtime_seconds,memory_usage_bytes,num_true,num_false,mean_rpm_true,mean_rpm_false,sd_rpm_true,sd_rpm_false,fold_change,test_statistic,p_value,true_biosamples,false_biosamples"""
+OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,%snum_true,num_false,mean_rpm_true,mean_rpm_false,sd_rpm_true,sd_rpm_false,fold_change,test_statistic,p_value,true_biosamples,false_biosamples"""
 
 # debugging
 num_tests = 0
@@ -346,13 +347,14 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
     """Process the given group, and return an output file
     """
     # num_metasets = metadata_df.shape[0]
-    num_biosamples = len(biosample_ref)
+    # num_biosamples = len(biosample_ref)
     result = ''
     reusable_results = {}  # save results while a group is processed, so we can avoid recomputing them
 
     for _, row in metadata_df.iterrows():
-        test_start_time = time.time()
-        tracemalloc.start()
+        if PERFOMANCE_STATS:
+            test_start_time = time.time()
+            tracemalloc.start()
 
         index_is_inlcude = row['include?']
         index_list = row['biosample_index_list']
@@ -425,20 +427,26 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
 
             if p_value < P_VALUE_THRESHOLD:
                 status += '; significant'
-                too_many = 'too many biosamples to list'
-                true_biosamples = '; '.join([biosample_ref[i] for i in index_list]) if num_true < 1000 else too_many
-                false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list]) if num_false < 1000 else too_many
+                too_many, threshold = 'too many biosamples to list', 200
+                true_biosamples = '; '.join([biosample_ref[i] for i in index_list]) \
+                    if (num_true < threshold and index_is_inlcude) or (num_false < threshold and not index_is_inlcude) else too_many
+                false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list]) \
+                    if (num_true < threshold and not index_is_inlcude) or (num_false < threshold and index_is_inlcude) else too_many
                 if not index_is_inlcude:
                     true_biosamples, false_biosamples = false_biosamples, true_biosamples
             else:
                 true_biosamples, false_biosamples = '', ''
             log_print(f"Finished with p-value: {p_value}", 2)
 
-        _, peak_memory = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        if PERFOMANCE_STATS:
+            _, peak_memory = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            extra_info = f'{time.time() - test_start_time}, {peak_memory},'
+        else:
+            extra_info = ''
 
         # record the output
-        this_result = (f"{bioproject_name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{time.time() - test_start_time},{peak_memory},"
+        this_result = (f"{bioproject_name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
                        f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
         result += this_result
         global progress
@@ -633,7 +641,9 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                     try:
                         # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
                         with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as f:
-                            f.write(OUT_COLS_STR % input_info[0] + '\n')
+                            if PERFOMANCE_STATS:
+                                extra_info = 'runtime_seconds,memory_usage_bytes,'
+                            f.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
                             f.write(output_text_lines)
                         log_print(f"Output file for {biopj} created successfully")
                     except Exception as e:
@@ -647,7 +657,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                 else:  # output_text_lines is None
                     log_print(f"There was a problem with making an output file for {biopj}")
                     with open('blacklist.txt', 'a') as f:
-                        f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided...")
+                        f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided OR not enough runs provided for this bioproject\n")
 
         else:  # SCHEDULING
             # TODO: IMPLEMENT SCHEDULING
@@ -666,12 +676,19 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # ================
     # concatenate all the output files in the block into one csv (spans multiple bioprojects)
     if COMBINE_OUTPUTS:
+        header_is_written = False
         for file in os.listdir(OUTPUT_DIR_DISK):
             # make sure the file's date is the same as the date mwas started
             try:
-                if file.endswith('.csv') and file.split('output_')[-1].split('.')[0] == date:
+                if file.endswith('.csv') and file.split('output')[-1].split('.')[0] == date:
                     with open(f"{OUTPUT_DIR_DISK}/{file}", 'r') as f:
-                        with open(f"{OUTPUT_DIR_DISK}/combined_output_{date}.csv", 'a') as combined:
+                        with open(f"{OUTPUT_DIR_DISK}/mwas_output{date}.csv", 'a') as combined:
+                            if not header_is_written:
+                                if PERFOMANCE_STATS:
+                                    extra_info = 'runtime_seconds,memory_usage_bytes,'
+                                combined.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
+                                header_is_written = True
+                            next(f)  # ignore first line
                             combined.write(f.read())
                     os.remove(f"{OUTPUT_DIR_DISK}/{file}")
             except Exception as e:  # string splitting error or file not found
@@ -711,10 +728,10 @@ def main(args: list[str], using_logging=False) -> int | None:
 
     # Check if the correct number of arguments is provided
     if num_args < 2 or args[1] in ('-h', '--help'):
-        log_print("Usage: python mwas_general.py data_file.csv", 0)
+        log_print("Usage: python mwas_general.py data_file.csv [flags]", 0)
         return 1
     elif args[1].endswith('.csv'):
-        global logging_level, IMPLICIT_ZEROS, GROUP_NONZEROS_ACCEPTANCE_THRESHOLD, ALREADY_NORMALIZED, P_VALUE_THRESHOLD, ONLY_T_TEST, COMBINE_OUTPUTS
+        global logging_level, IMPLICIT_ZEROS, GROUP_NONZEROS_ACCEPTANCE_THRESHOLD, ALREADY_NORMALIZED, P_VALUE_THRESHOLD, ONLY_T_TEST, COMBINE_OUTPUTS, PERFOMANCE_STATS
         if '--suppress-logging' in args:
             logging_level = 1
         if '--no-logging' in args:
@@ -739,6 +756,8 @@ def main(args: list[str], using_logging=False) -> int | None:
             except Exception as e:
                 log_print(f"Error in setting group nonzeros threshold: {e}", 0)
                 return 1
+        if '--performance-stats' in args:  # TODO: test
+            PERFOMANCE_STATS = True
 
         try:  # reading the input file
             input_df = pd.read_csv(args[1])  # arg1 is a file path

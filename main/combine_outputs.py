@@ -32,6 +32,7 @@ if __name__ == '__main__':
         date = max(dates, key=date_key)
         print(f'Most recent date: {date}')
 
+    first_done = False
     for file in os.listdir(OUTPUT_DIR_DISK):
         if date not in file:
             continue
@@ -41,7 +42,15 @@ if __name__ == '__main__':
             if file.endswith('.csv') and file.split('_output')[-1].split('.')[0] == date:
                 with open(f"{OUTPUT_DIR_DISK}/{file}", 'r') as f:
                     with open(f"{OUTPUT_DIR_DISK}/combined_output_{date}.csv", 'a') as combined:
-                        combined.write(f.read())
+                        if not first_done:
+                            # write the header
+                            first_done = True
+                            combined.write(f.readline())
+
+                        # write every line except the header
+                        for i, line in enumerate(f):
+                            if i != 0:
+                                combined.write(line)
                 os.remove(f"{OUTPUT_DIR_DISK}/{file}")
         except Exception as e:  # string splitting error or file not found
             print(f"Error while combining output files with: {e}")
