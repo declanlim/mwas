@@ -122,16 +122,9 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
         echo "Error: input file must have 3 columns"
         exit 1
     fi
-    # build the flags string
-    FLAGS=""
-    VALID_FLAGS=("--suppress-logging" "--no-logging" "--explicit-zeros" "--explicit-zeroes" "--t-test-only" "--already-normalized" "--p-value-threshold" "--group-nonzero-threshold" "--performance-stats")
-    # Loop through all command line arguments
-    for arg in "$@"
-    do
-        if [[ " ${VALID_FLAGS[@]} " =~ " ${arg} " ]]; then
-            FLAGS="$FLAGS $arg"
-        fi
-    done
+    # get MWAS flags
+    FLAGS="${@:3}"
+
     # jsonify the input file to send to the server (it will be reconstructed as a csv on the server)
     CSV_FILE=$2
     csvjson $CSV_FILE | jq . > request.json
@@ -147,5 +140,11 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
     rm request.json
-    echo $response
+    # read response message and if it says with exit code 0, tell user's MWAS finished successfully otherwise, say there was an issue processing the input
+    if [[ $response == *"Error"* ]]; then
+        echo "Error: $response"
+        exit 1
+    else
+        echo "MWAS finished successfully."
+    fi
 fi
