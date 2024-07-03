@@ -21,12 +21,12 @@ def run():
         length = len(request.data)
         logging.info("Received request with data: %s ... (and %s more chars)", request.data[:20], length - 20)
         logging.info("Received flags: %s", flags)
+        logging.info("s3_bucket: %s", destination)
 
         # Create a temporary file to store the CSV data
         with open('temp_input_from_request.csv', mode='w') as temp_csv_file:
             try:
-                data = request.json.get('data')
-                json_data = json.loads(data)
+                json_data = request.json.get('data')
             except Exception as e:
                 logging.error("Error decoding data: %s", e)
                 return jsonify({"error": str(e)}), 500
@@ -43,6 +43,8 @@ def run():
 
         # execute mwas
         try:
+            # turn flags into a list
+            flags = flags.split(" ")
             status = mwas_general.main(['server.py', temp_csv_filepath, "--s3-storing", destination] + flags, True)
         except Exception as e:
             status = 1

@@ -15,12 +15,12 @@ S3_BUCKET="s3://serratus-biosamples/mwas_data/"
 # check dependencies: jq, csvjson (from csvkit), and prompt user to install if not found
 if ! command -v jq &> /dev/null; then
     echo "Error: jq is not installed"
-    echo "Please install jq by running 'brew install jq' or 'sudo apt-get install jq'"
+    echo "Please install jq by running 'sudo apt install jq'"
     exit 1
 fi
 if ! command -v csvjson &> /dev/null; then
     echo "Error: csvjson is not installed"
-    echo "Please install csvjson by running 'pip install csvkit'"
+    echo "Please install csvjson by running 'sudo apt install csvkit'"
     exit 1
 fi
 if ! command -v curl &> /dev/null; then
@@ -31,37 +31,85 @@ fi
 
 # help menu
 if [[ $1 == "-h" || $1 == "--help" || $# -eq 0 ]]; then
-    echo "Usage: mwas [OPTIONS] [MWAS FLAGS]"
-    echo "input_file: path to input file"
-    echo "input_file format: csv, 3 columns, headers can be named anything, but must follow the format below"
-    echo "  column order: accession, group, quantification"
-    echo "  types: string, string, int"
-    echo ""
-    echo "  example:"
-    echo "    run,family_name,n_reads"
-    echo "    ERR2756783,Deltavirus,1"
-    echo "    ERR2756784,Bromoviridae,1"
-    echo "    ERR2756784,Mitoviridae,1"
-    echo "    ERR2756785,Totiviridae,3"
-    echo "    ERR2756786,Mitoviridae,4"
-    echo ""
-    echo "OPTIONS:"
-    echo "  -h, --help: show this help message and exit"
-    echo "  -r, --run [input_file]: run MWAS with the specified input file, without downloading anything afterwards"
-    echo "  -rd, --run-download [input_file]: run MWAS, and download results from s3 to local machine when processing is complete"
-    echo "  -rl, --run-log [input_file]: run MWAS, and download logs from s3 to local machine when processing is complete"
-    echo "MWAS FLAGS: (used with -r flag)"
-    echo "  --suppress-logging: suppress logging (default is verbose logging)"
-    echo "  --no-logging: no logging (overrides --suppress-logging)"
-    echo "  --explicit-zeros, --explicit-zeroes: quantifications of 0 are only included in the analysis if they are explicitly stated in the input file (default is implicit zeros)"
-    echo "  --combine-outputs: combine outputs of multiple bioprojects (default is to keep them separate) (presence of -d flag will enable this flag)"
-    echo "  --t-test-only: only run t-tests (not recommended)"
-    echo "  --already-normalized: input file quantifications are already normalized (default is to normalize using spots from serratus's logan database)"
-    echo "  --p-value-threshold [FLOAT]: set the p-value threshold for significance (default is 0.005)"
-    echo "  --group-nonzero-threshold [INT]: set the minimum number of non-zero quantifications in a group for it to be included in the analysis (default is 3) (useless when --explicit-zeros is set)"
-    echo "  --performance-stats: include performance statistics in the log (default is to exclude them) (recommended developer use only)"
+    cat << EOF
+
+AAAAAAAA               AAAAAAAA  CCCCCCCC                           CCCCCCCC     GGG                  TTTTTTTTTTTTTTT
+A.......A             A.......A  C......C                           C......C    G...G               TT...............T
+A........A           A........A  C......C                           C......C   G.....G             T.....TTTTTT......T
+A.........A         A.........A  C......C                           C......C  G.......G            T.....T     TTTTTTT
+A::::::::::A       A::::::::::A   C:::::C           CCCCC           C:::::C  G:::::::::G           T:::::T
+A:::::::::::A     A:::::::::::A    C:::::C         C:::::C         C:::::C  G:::::G:::::G          T:::::T
+A:::::::A::::A   A::::A:::::::A     C:::::C       C:::::::C       C:::::C  G:::::G G:::::G          T::::TTTT
+A::::::A A::::A A::::A A::::::A      C:::::C     C:::::::::C     C:::::C  G:::::G   G:::::G          TT::::::TTTTT
+A||||||A  A||||A||||A  A||||||A       C|||||C   C|||||C|||||C   C|||||C  G|||||G     G|||||G           TTT||||||||TT
+A||||||A   A|||||||A   A||||||A        C|||||C C|||||C C|||||C C|||||C  G|||||GGGGGGGGG|||||G             TTTTTT||||T
+A||||||A    A|||||A    A||||||A         C|||||C|||||C   C|||||C|||||C  G|||||||||||||||||||||G                 T|||||T
+A||||||A     AAAAA     A||||||A          C|||||||||C     C|||||||||C  G|||||GGGGGGGGGGGGG|||||G                T|||||T
+AIIIIIIA               AIIIIIIA           CIIIIIIIC       CIIIIIIIC  GIIIIIG             GIIIIIG   TTTTTTT     TIIIIIT
+AIIIIIIA               AIIIIIIA            CIIIIIC         CIIIIIC  GIIIIIG               GIIIIIG  TIIIIIITTTTTTIIIIIT
+AIIIIIIA               AIIIIIIA             CIIIC           CIIIC  GIIIIIG                 GIIIIIG TIIIIIIIIIIIIIIITT
+AAAAAAAA               AAAAAAAA              CCC             CCC  GGGGGGG                   GGGGGGG TTTTTTTTTTTTTTT
+
+  Metadata Wide Association Study (MWAS)
+  Version: 1.0.0
+
+
+Usage: mwas [OPTIONS] [MWAS FLAGS]
+
+input_file: path to input file
+input_file format: csv, 3 columns, headers can be named anything, but must follow the format below:
+  column order: accession, group, quantification
+  types: string, string, int
+
+Example:
+  run,family_name,n_reads
+  ERR2756783,Deltavirus,1
+  ERR2756784,Bromoviridae,1
+  ERR2756784,Mitoviridae,1
+  ERR2756785,Totiviridae,3
+  ERR2756786,Mitoviridae,4
+
+OPTIONS:
+  -h, --help                Show this help message
+  -r, --run [input_file]    Run MWAS with the specified input file, without
+                            downloading anything afterwards
+  -rd, --run-download       Run MWAS, and download results from s3 to local
+                            machine when processing is complete
+  -rl, --run-log            Run MWAS, and download logs from s3 to local machine
+                            when processing is complete
+
+MWAS FLAGS: (used with -r, -rd, -rl options)
+  --suppress-logging        Suppress logging (default is verbose logging)
+  --no-logging              No logging (overrides --suppress-logging)
+  --combine-outputs         Combine outputs of multiple bioprojects (default is
+                            to keep them separate; -rd flag will automatically
+                            enable this flag)
+  --t-test-only             Only run t-tests (not recommended)
+  --already-normalized      Input file quantifications are already normalized
+                            (default is to normalize using spots from serratus's
+                            logan database)
+  --explicit-zeros          Quantifications of 0 are only included in the analysis
+                            if they are explicitly stated in the input file
+                            (default is implicit zeros)
+  --p-value-threshold [FLOAT]
+                            Set the p-value threshold for significance
+                            (default is 0.005)
+  --group-nonzero-threshold [INT]
+                            Set the minimum number of non-zero quantifications
+                            in a group for it to be included in the analysis
+                            (default is 3; useless when --explicit-zeros is set)
+  --performance-stats       Include performance statistics in the log (default
+                            is to exclude them; recommended developer use only)
+
+  MWAS repository: <https://github.com/declanlim/mwas_rfam>
+EOF
     exit 0
 elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || $1 == "-rl" || $1 == "--run-log" ]]; then
+    # check if input file is provided
+    if [[ $# -lt 2 ]]; then
+        echo "Error: input file not provided"
+        exit 1
+    fi
     # check if input file exists
     if [[ ! -f $2 ]]; then
         echo "Error: input file does not exist"
