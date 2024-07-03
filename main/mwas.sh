@@ -98,7 +98,7 @@ MWAS FLAGS: (used with -r, -rd, -rl options)
   --performance-stats       Include performance statistics in the log (default
                             is to exclude them; recommended developer use only)
 
-  MWAS repository: <https://github.com/declanlim/mwas_rfam>
+MWAS repository: <https://github.com/declanlim/mwas_rfam>
 EOF
     exit 0
 elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || $1 == "-rl" || $1 == "--run-log" ]]; then
@@ -145,7 +145,7 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
     echo "Storing MWAS output in s3 bucket: s3://serratus-biosamples/mwas_data/$hash"
 
     # send request to server to run MWAS (how to catch response?
-    response=$(curl -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
+    response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
     rm request.json
     echo $response
 fi
