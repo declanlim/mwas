@@ -60,7 +60,9 @@ QUERY = LOGAN_SRA_QUERY
 PICKLE_DIR = './pickles'  # will be relative to working directory
 OUTPUT_DIR_DISK = './outputs'
 S3_METADATA_DIR = 's3://serratus-biosamples/condensed-bioproject-metadata'  # 's3://serratus-biosamples/mwas_setup/bioprojects'
-# S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_outputs'
+S3_OUTPUT_DIR = None
+TEMP_LOCAL_BUCKET = None
+PROBLEMATIC_BIOPJS_FILE = 'bioprojects_ignored.txt'
 OS = platform.system()
 SHELL_PREFIX = 'wsl ' if OS == 'Windows' else ''
 DEFAULT_MOUNT_POINT = '/mnt/mwas'
@@ -74,16 +76,18 @@ PICKLE_SPACE_LIMIT = 2 * 1024 ** 3  # 2 GB
 SCHEDULING = False
 
 # special constants
-BLACKLIST = set()  # list of bioprojects that are too large
 
-# stats constants
+BLACKLIST = {"PRJEB37886", "PRJNA514245", "PRJNA716984", "PRJNA731148", "PRJNA631508", "PRJNA665224", "PRJNA716985", "PRJNA479871", "PRJNA715749", "PRJEB11419",
+             "PRJNA750736", "PRJNA525951", "PRJNA720050", "PRJNA731152", "PRJNA230403", "PRJNA675921", "PRJNA608064", "PRJNA486548",
+             "nan", "PRJEB43828", "PRJNA609094", "PRJNA686984", "PRJNA647773", "PRJNA995950"}  # list of bioprojects that are too large
+
 # flags
 IMPLICIT_ZEROS = True  # TODO: implement this flag for when it's False
 GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
 ALREADY_NORMALIZED = False  # if it's false, then we need to normalize the data by dividing quantifier by spots
 P_VALUE_THRESHOLD = 0.005
 ONLY_T_TEST = False  # if True, then only t tests will be run, and other tests, e.g. permutation tests, will not be done
-COMBINE_OUTPUTS = False  # if false, there will ba a separate output file for each bioproject
+COMBINE_OUTPUTS = True  # if false, there will ba a separate output file for each bioproject
 PERFOMANCE_STATS = False
 
 # constants
@@ -110,6 +114,17 @@ def log_print(msg: Any, lvl: int = 1) -> None:
             logging.info(msg)
         else:
             print(msg)
+
+
+def sync_s3() -> None:
+    """Sync the local output directory with the given s3 bucket"""
+    if S3_OUTPUT_DIR:
+        try:
+            # store the combined output file in s3 and remove the local copy
+            command = f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}"
+            subprocess.run(SHELL_PREFIX + command, shell=True)
+        except Exception as e:
+            log_print(f"Error in storing the combined output file in s3: {e}")
 
 
 class BioProjectInfo:
@@ -257,13 +272,15 @@ class MountTmpfs:
             log_print(f"{self.mount_point} is not mounted as tmpfs")
 
 
-def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str, BioProjectInfo]:
+def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> tuple[dict[str, BioProjectInfo], int]:
     """Retrieve metadata for the given bioprojects, and organize them in a dictionary
     storage will usually be the tmpfs mount point mount_tmpfs
     """
     ls_file_name = "ls_batch_command_list.txt"
     size_list_file = "file_list_with_sizes.txt"
     cp_file_name = "cp_batch_command_list.txt"
+
+    num_skipped = 0
 
     # handling windows os special treatment
     file_storage = storage.mount_point
@@ -287,24 +304,40 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
     # List files with sizes using s5cmd (remember, this only looks through a single block of bioprojects)
     # note: s5cmd does not support piping, so we have to use awk here as opposed to in the previous step for each line
     command_list = SHELL_PREFIX + f"s5cmd run {ls_file_name} | " + SHELL_PREFIX + f"awk \'{{print $(NF-1), $NF}}\' > {size_list_file}"
-    subprocess.run(command_list, shell=True)
+    process = subprocess.run(command_list, shell=True, stderr=subprocess.PIPE)
+    if process.stderr:
+        error_msg = process.stderr.decode().split('\n')
+        with open(PROBLEMATIC_BIOPJS_FILE, 'a') as blacklist_file:
+            for line in error_msg:
+                if 'no object found' in line:
+                    biopj = line.split('/')[-1].split('.')[0]
+                    log_print(f"could not find a metadata file for {biopj}")
+                    blacklist_file.write(f"{biopj} had no metadata file. Consider rescraping NCBI then recondensing into mwaspkl files\n")
+                    num_skipped += 1
     os.remove(ls_file_name)  # useless now that we have the file_list_with_sizes.txt
 
     # filter files by size, and also set create each BioProjectInfo object and load them into a dictionary
     biopj_info_dict = {}
     total_size = 0
-    with open(size_list_file, 'r') as read_file, open(cp_file_name, 'w') as write_file, open('blacklist.txt', 'a') as blacklist_file:
+    with open(size_list_file, 'r') as read_file, open(cp_file_name, 'w') as write_file, open(PROBLEMATIC_BIOPJS_FILE, 'a') as blacklist_file:
         for line in read_file:
             parts = line.split()
             # remember, we're reading from a ls output file that was reformatted by awk: parts[0] is an int, parts[1] is <biopj>.pickle
             size, file = int(parts[0]), parts[1]
 
             biopj_name = file.split('.')[0]  # get <biopj> from <biopj>.pickle
-            if size == 1:
-                log_print(f"Skipping {biopj_name} because it is empty.")
-                blacklist_file.write(f"{biopj_name} was_empty\n")
+            if size == 1:  # a single byte file is an empty file, due to the way I made the condensing script
+                # but since blacklisted files have a 1 byte while true empty files have a 0 byte, we must read the file
+                if biopj_name in BLACKLIST:
+                    reason = "blacklisted"
+                else:
+                    reason = "empty"
+                log_print(f"Skipping {biopj_name} because it is {reason}.")
+                blacklist_file.write(f"{biopj_name} was_{reason}\n")
+                num_skipped += 1
+                continue
 
-                # TODO: also ignore metadata files that have less than 4 biosamples - we'll need to have queried the mwas database for this
+            # TODO: also ignore metadata files that have less than 4 biosamples - we'll need to have queried the mwas database for this
 
             elif size <= MAX_PROJECT_SIZE and biopj_name not in BLACKLIST:
                 write_file.write(f"cp -f {S3_METADATA_DIR}/{file} {file_storage}\n")
@@ -313,6 +346,8 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
             else:
                 log_print(f"Skipping {biopj_name} because it is too large, with {size} bytes.")
                 blacklist_file.write(f"{biopj_name} too_large\n")
+                num_skipped += 1
+            # check if we've reached the limit
             if total_size >= PICKLE_SPACE_LIMIT:
                 log_print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
                 break
@@ -323,7 +358,7 @@ def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> dict[str,
     subprocess.run(SHELL_PREFIX + command_cp, shell=True)
     os.remove(cp_file_name)
 
-    return biopj_info_dict
+    return biopj_info_dict, num_skipped
 
 
 def get_log_fold_change(true, false):
@@ -456,12 +491,13 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
         global progress
         progress += int(not skip_tests)
         log_print(this_result, 2)
-        log_print(f"Progress: {progress} tests completed of {num_tests} tests completed for {bioproject_name}. ({round(100 * (progress/num_tests), 3)}%)\n")
+        if num_tests > 0:
+            log_print(f"Progress: {progress} tests completed of {num_tests} tests completed for {bioproject_name}. ({round(100 * (progress / num_tests), 3)}%)\n")
 
     return result
 
 
-def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.DataFrame | None:
+def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> str | None:
     """Process the given bioproject, and return an output file - concatenation of several group outputs
     """
     log_print(f"---------------------\nProcessing {bioproject.name}...")
@@ -527,7 +563,7 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
                     groups_rpm_map[g][0][i] = reads.values[0]
                 else:
                     groups_rpm_map[g][0][i] = reads.values[0] / spots.values[0] * NORMALIZING_CONST \
-                                              if spots.values[0] != 0 else MAP_UNKNOWN
+                        if spots.values[0] != 0 else MAP_UNKNOWN
 
     num_skipped_groups = sum([groups_rpm_map[group][1] for group in groups_rpm_map])
     if num_skipped_groups > 0:
@@ -556,6 +592,10 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> pd.
 
     log_print(f"Finished processing {bioproject.name} in {round(time.time() - time_start, 3)} seconds\n")
 
+    if output_constructor == '':  # something interesting happened
+        if num_skipped_groups == len(groups_rpm_map):
+            return "all groups skipped"
+
     return output_constructor
 
 
@@ -571,14 +611,8 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     log_print(f"Starting MWAS at {date}")
 
     # clear out the blacklist file
-    with open('blacklist.txt', 'w') as f:
+    with open(PROBLEMATIC_BIOPJS_FILE, 'w') as f:
         f.write('')
-
-    # TODO: HASHING THE INPUT FILE
-    # hash_code = hash_file(data_file)
-    # check if dir <hash_code> in s3
-    # if yes, get its output csv
-    # otherwise, create the dir and store the input_df there as a csv
 
     # CREATE MAIN DATAFRAME
     runs = data_file['run'].unique()
@@ -600,7 +634,11 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     bioprojects_list = main_df['bio_project'].unique()
     shuffle(bioprojects_list)
     num_bioprojects = len(bioprojects_list)
+    global BLOCK_SIZE
+    if num_bioprojects < BLOCK_SIZE:
+        BLOCK_SIZE = num_bioprojects
     num_blocks = max(1, num_bioprojects // BLOCK_SIZE)
+    log_print(f"Number of bioprojects found: {num_bioprojects}, Number of blocks: {num_blocks}", 2)
 
     # TODO: time & space estimator: get subsets of main_df for all bioprojects to get num groups and num skipped groups
     # and also query all bioprojects to mwas_database to get ref_list length, num metadata tests, and other stuff etc
@@ -608,28 +646,31 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
 
     # ================
     # PROCESSING
+    sync_s3()
     # ================
 
     i = 0
     while i < num_bioprojects:  # for each block (roughly) in bioprojects
         # GET LIST OF BIOPROJECTS IN THIS CURRENT BLOCK
         if i + BLOCK_SIZE > num_bioprojects:  # currently inside a non-full block
-            biopj_block = bioprojects_list[i:]
+            biopj_block = bioprojects_list[i:]  # just get whatever's left
         else:
-            biopj_block = bioprojects_list[i: i + BLOCK_SIZE]
+            biopj_block = bioprojects_list[i: i + BLOCK_SIZE]  # get a block's worth of bioprojects
 
         # GET METADATA FOR BIOPROJECTS IN THIS BLOCK
-        biopj_info_dict = metadata_retrieval(biopj_block, storage)
-        if len(biopj_info_dict) < BLOCK_SIZE:
+        biopj_info_dict, num_skipped = metadata_retrieval(biopj_block, storage)
+        if len(biopj_info_dict) + num_skipped < BLOCK_SIZE and num_bioprojects > 0:
             # handling since we reached the space limit before downloading a full blocks worth of bioprojects
             i += len(biopj_info_dict)
         else:
             i += BLOCK_SIZE  # move to the next block
-
+            if len(biopj_info_dict) == 0:
+                log_print(f"Error: no bioprojects were processed in this block. Moving to the next block.")
+        num_bioprojects -= num_skipped
         del biopj_block
 
+        # BEGIN PROCESSING THE BIOPROJECTS IN THIS BLOCK
         if not SCHEDULING:
-            # random.shuffle(biopj_block) is this even necessary since it's iterating over a dict?
             # PROCESS THE BLOCK
             for biopj in biopj_info_dict.keys():
                 global progress
@@ -639,28 +680,32 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                 except Exception as e:
                     log_print(f"Error processing bioproject {biopj}: {e}", 2)
                     biopj_info_dict[biopj].delete_metadata()
-                    continue
+                    output_text_lines = f'error: {e}'
 
                 # OUTPUT FILE (FOR THIS PARTICULAR BIOPROJECT) TODO: postprocessing will involve combining all these files stored on disk
-                if output_text_lines is not None and output_text_lines:
-                    try:
-                        # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
-                        with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as f:
-                            extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
-                            f.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
-                            f.write(output_text_lines)
-                        log_print(f"Output file for {biopj} created successfully")
-                    except Exception as e:
-                        log_print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
-                        with open('blacklist.txt', 'a') as f:
+                with open(PROBLEMATIC_BIOPJS_FILE, 'a') as f:
+                    if output_text_lines == 'all groups skipped':
+                        log_print(f"All groups were skipped for {biopj}. Not creating an output file for it.")
+                        f.write(f"{biopj} all_groups_skipped\n")
+                    elif 'error' in output_text_lines:
+                        log_print(f"Output file for {biopj} was not created due to an error: {output_text_lines}")
+                        f.write(f"{biopj} output_{output_text_lines}\n")
+                    elif output_text_lines is not None and output_text_lines:
+                        try:
+                            # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
+                            with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as out_file:
+                                extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
+                                out_file.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
+                                out_file.write(output_text_lines)
+                            log_print(f"Output file for {biopj} created successfully")
+                        except Exception as e:
+                            log_print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
                             f.write(f"{biopj} output_error_despite_successful_process\n")
-                elif output_text_lines is not None and output_text_lines == []:
-                    log_print(f"Output file for {biopj} is empty. Not creating a file for it.")
-                    with open('blacklist.txt', 'a') as f:
+                    elif output_text_lines is not None and output_text_lines == '':
+                        log_print(f"Output file for {biopj} is empty. Not creating a file for it.")
                         f.write(f"{biopj} empty_output___this_is_strange\n")
-                else:  # output_text_lines is None
-                    log_print(f"There was a problem with making an output file for {biopj}")
-                    with open('blacklist.txt', 'a') as f:
+                    else:  # output_text_lines is None
+                        log_print(f"There was a problem with making an output file for {biopj}")
                         f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided OR not enough runs provided for this bioproject\n")
 
         else:  # SCHEDULING
@@ -677,16 +722,19 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
 
     # ================
     # POST-PROCESSING
+    sync_s3()
     # ================
+
     # concatenate all the output files in the block into one csv (spans multiple bioprojects)
     if COMBINE_OUTPUTS:
         header_is_written = False
+        combined_output_name = f"mwas_output_{date}.csv"
         for file in os.listdir(OUTPUT_DIR_DISK):
             # make sure the file's date is the same as the date mwas started
             try:
-                if file.endswith('.csv') and file.split('output')[-1].split('.')[0] == date:
+                if file.endswith('.csv') and file.split('_output_')[-1].split('.')[0] == date:
                     with open(f"{OUTPUT_DIR_DISK}/{file}", 'r') as f:
-                        with open(f"{OUTPUT_DIR_DISK}/mwas_output{date}.csv", 'a') as combined:
+                        with open(f"{OUTPUT_DIR_DISK if not S3_OUTPUT_DIR else TEMP_LOCAL_BUCKET}/{combined_output_name}", 'a') as combined:
                             if not header_is_written:
                                 extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
                                 combined.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
@@ -708,7 +756,18 @@ def cleanup(mount_tmpfs: MountTmpfs) -> Any:
     if platform.system() == 'Linux':
         mount_tmpfs.unmount()
 
-#
+    if os.path.exists('cp_batch_command_list.txt'):
+        os.remove('cp_batch_command_list.txt')
+    if os.path.exists('ls_batch_command_list.txt'):
+        os.remove('ls_batch_command_list.txt')
+    if os.path.exists('file_list_with_sizes.txt'):
+        os.remove('file_list_with_sizes.txt')
+
+    if isinstance(TEMP_LOCAL_BUCKET, str) and os.path.exists(TEMP_LOCAL_BUCKET):
+        # remove the local copy of the s3 bucket
+        rmtree(TEMP_LOCAL_BUCKET)
+
+
 # def display_memory():
 #     """Display the current and peak memory usage for debugging purposes"""
 #     current, peak = tracemalloc.get_traced_memory()
@@ -734,15 +793,16 @@ def main(args: list[str], using_logging=False) -> int | None:
         log_print("Usage: python mwas_general.py data_file.csv [flags]", 0)
         return 1
     elif args[1].endswith('.csv'):
-        global logging_level, IMPLICIT_ZEROS, GROUP_NONZEROS_ACCEPTANCE_THRESHOLD, ALREADY_NORMALIZED, P_VALUE_THRESHOLD, ONLY_T_TEST, COMBINE_OUTPUTS, PERFOMANCE_STATS
+        global logging_level, IMPLICIT_ZEROS, GROUP_NONZEROS_ACCEPTANCE_THRESHOLD, ALREADY_NORMALIZED, P_VALUE_THRESHOLD, ONLY_T_TEST, \
+            COMBINE_OUTPUTS, PERFOMANCE_STATS, S3_OUTPUT_DIR, TEMP_LOCAL_BUCKET, PROBLEMATIC_BIOPJS_FILE
         if '--suppress-logging' in args:
             logging_level = 1
         if '--no-logging' in args:
             logging_level = 0
         if '--explicit-zeros' in args or '--explicit-zeroes' in args:
             IMPLICIT_ZEROS = False
-        if '--combine-outputs' in args:  # TODO: test
-            COMBINE_OUTPUTS = True
+        if '--uncombine-outputs' in args:
+            COMBINE_OUTPUTS = False
         if '--t-test-only' in args:
             ONLY_T_TEST = True
         if '--already-normalized' in args:  # TODO: test
@@ -759,13 +819,27 @@ def main(args: list[str], using_logging=False) -> int | None:
             except Exception as e:
                 log_print(f"Error in setting group nonzeros threshold: {e}", 0)
                 return 1
-        if '--performance-stats' in args:  # TODO: test
+        if '--performance-stats' in args:
             PERFOMANCE_STATS = True
         # s3 storing
         if '--s3-storing' in args:
             try:
-                S3_STORING = True
-                S3_OUTPUT_DIR = args[args.index('--s3-storing') + 1]
+                S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'  # important to have the trailing slash
+                TEMP_LOCAL_BUCKET = f"./{args[args.index('--s3-storing') + 1]}"
+                PROBLEMATIC_BIOPJS_FILE = f"{TEMP_LOCAL_BUCKET}/problematic_biopjs.txt"
+
+                # create local disk folder to sync with s3
+                if not os.path.exists(TEMP_LOCAL_BUCKET):
+                    os.mkdir(TEMP_LOCAL_BUCKET)
+
+                # create the s3 bucket
+                process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}/", shell=True)
+                if process.returncode == 0:
+                    log_print(f"Created s3 bucket: {S3_OUTPUT_DIR}")
+                else:
+                    log_print(f"Error in creating s3 bucket: {S3_OUTPUT_DIR}", 0)
+                    return 1
+
             except Exception as e:
                 log_print(f"Error in setting s3 output directory: {e}", 0)
                 return 1
@@ -809,14 +883,26 @@ def main(args: list[str], using_logging=False) -> int | None:
         register(cleanup, mount_tmpfs)  # handle cleanup on exit
 
         # RUN MWAS
-        log_print("Running MWAS...", 0)
+        log_print("===============\nRunning MWAS...\n===============", 0)
         run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs)
         log_print("MWAS completed successfully", 0)
 
-        # UNMOUNT TMPFS
-        mount_tmpfs.unmount()
         # print(display_memory())
         log_print(f"Time taken: {round((time.time() - time_start) / 60, 3)} minutes", 0)
+
+        # =================
+        # DONE
+        sync_s3()
+        # =================
+
+        # UNMOUNT TMPFS
+        mount_tmpfs.unmount()
+
+        if S3_OUTPUT_DIR:
+            # remove the local copy of the s3 bucket
+            rmtree(TEMP_LOCAL_BUCKET)
+            print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
+
         return 0
 
     else:

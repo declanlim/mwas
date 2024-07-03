@@ -9,6 +9,7 @@ import os
 
 from pandas import DataFrame, Series
 
+
 # TODO: everything to lowercase, and remove commas
 def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=False) -> tuple[Any, DataFrame, str, DataFrame | tuple | Any, bool]:
     """takes a metadata dataframe from a bioproject (accessed by biosample_id)
@@ -94,19 +95,25 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
                         new_df_builder[biosample_code] = [(col, factor), (biosample_index_list, include)]  # if mostly_true, we want to mark this index list as an exlude list
 
     new_df_data = []
+    biosamples_ref_lst = metadata_df['biosample_id'].tolist()
     for entry in new_df_builder:
         (attributes, values), (index_list, include) = new_df_builder[entry]
+        if len(index_list) in (1, n - 1):  # ignore sets that are too small or too large, since we won't end up testing them in MWAS anyway
+            continue
+        if min(len(index_list), len(biosamples_ref_lst) - len(index_list)) < 4:
+            test_type = 't-test'
+        else:
+            test_type = 'permutation-test'
         new_df_data.append({  # important to force values to be string - fixes a bug related to mixed datatypes in one column
-            'attributes': attributes, 'values': str(values), 'biosample_index_list': index_list, 'include?': include
+            'attributes': attributes, 'values': str(values), 'biosample_index_list': index_list, 'include?': include, 'test_type': test_type
         })
-    new_df = pd.DataFrame(new_df_data, columns=['attributes', 'values', 'biosample_index_list', 'include?'])
+    new_df = pd.DataFrame(new_df_data, columns=['attributes', 'values', 'biosample_index_list', 'include?', 'test_type'])
     empty_result = False
     if new_df.shape[0] == 0:
         comment += "No sets were generated from the metadata dataframe. "
         print("No sets were generated from the metadata dataframe.")
         empty_result = True
 
-    biosamples_ref_lst = metadata_df['biosample_id'].tolist()
     return biosamples_ref_lst, new_df, comment, metadata_df if update_metadata_df else (), empty_result
 
 

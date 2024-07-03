@@ -4,7 +4,6 @@ import os
 import sys
 import re
 
-
 OUTPUT_DIR_DISK = 'outputs'
 MONTH_TO_NUM = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
                 'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12}
@@ -12,7 +11,7 @@ MONTH_TO_NUM = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
 
 def date_key(_date):
     """Return a tuple of integers representing the date and time in the format:"""
-    _date = _date.split('_')
+    _date = re.split('_+', _date)
     time = _date[-2].split('-')
     return (int(_date[-1]), MONTH_TO_NUM[_date[-4]], int(_date[-3]), int(time[0]), int(time[1]), int(time[2]))
 
@@ -28,7 +27,7 @@ if __name__ == '__main__':
     if date == 'most_recent':
         # find the most recent date
         dates = [d.split('_output')[-1].split('.')[0] for d in os.listdir(OUTPUT_DIR_DISK)
-                 if re.match(r'^PRJ\w{2}\d*_output_\w{3}_\w{3}_\d{2}_\d{2}-\d{2}-\d{2}_\d{4}.csv$', d)]
+                 if re.match(r'^PRJ\w{2}\d*_output_\w{3}_\w{3}_*\d{1,2}_\d{2}-\d{2}-\d{2}_\d{4}.csv$', d)]
 
         date = max(dates, key=date_key)
         print(f'Most recent date: {date}')

@@ -81,9 +81,6 @@ OPTIONS:
 MWAS FLAGS: (used with -r, -rd, -rl options)
   --suppress-logging        Suppress logging (default is verbose logging)
   --no-logging              No logging (overrides --suppress-logging)
-  --combine-outputs         Combine outputs of multiple bioprojects (default is
-                            to keep them separate; -rd flag will automatically
-                            enable this flag)
   --t-test-only             Only run t-tests (not recommended)
   --already-normalized      Input file quantifications are already normalized
                             (default is to normalize using spots from serratus's
@@ -127,7 +124,7 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
     fi
     # build the flags string
     FLAGS=""
-    VALID_FLAGS=("--suppress-logging" "--no-logging" "--explicit-zeros" "--explicit-zeroes" "--combine-outputs" "--t-test-only" "--already-normalized" "--p-value-threshold" "--group-nonzero-threshold" "--performance-stats")
+    VALID_FLAGS=("--suppress-logging" "--no-logging" "--explicit-zeros" "--explicit-zeroes" "--t-test-only" "--already-normalized" "--p-value-threshold" "--group-nonzero-threshold" "--performance-stats")
     # Loop through all command line arguments
     for arg in "$@"
     do
@@ -144,6 +141,8 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
     # hash the JSON_DATA to check if the request has already been made and predetermine the response's location
     hash=$(echo -n "$JSON_DATA" | md5sum | awk '{ print $1 }')
     JSON_DATA=$(echo $JSON_DATA | jq --arg hash "$hash" '. + {dest: $hash}')
+
+    echo "Storing MWAS output in s3 bucket: s3://serratus-biosamples/mwas_data/$hash"
 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
