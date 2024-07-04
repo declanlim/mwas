@@ -74,7 +74,7 @@ SYSTEM_MOUNTS = 'wmic logicaldisk get name' if OS == 'Windows' else 'mount'
 BLOCK_SIZE = 1000
 MAX_PROJECT_SIZE = 50 * 1024 ** 2  # 50 MB
 PICKLE_SPACE_LIMIT = 2 * 1024 ** 3  # 2 GB
-SCHEDULING = False
+PARALLELIZING = False
 
 # special constants
 
@@ -105,6 +105,14 @@ progress = 0
 logging_level = 2  # 0: no logging, 1: minimal logging, 2: verbose logging
 use_logger = False
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("mwas_logging.txt")
+if logger.hasHandlers():
+    logger.handlers.clear()
+fh = logging.FileHandler("mwas_logging.txt")
+formatter = logging.Formatter("%(levelname)s - %(asctime)s - %(message)s")
+fh.setFormatter(formatter)
+logger.addHandler(fh)
+logger.setLevel(logging.INFO)
 
 
 def log_print(msg: Any, lvl: int = 1) -> None:
@@ -112,7 +120,7 @@ def log_print(msg: Any, lvl: int = 1) -> None:
     global logging_level, use_logger
     if lvl <= logging_level:
         if use_logger:
-            logging.info(msg)
+            logger.info(msg)
         else:
             print(msg)
 
@@ -129,6 +137,10 @@ def sync_s3() -> None:
             json.dump(json_data, f)
 
         # sync the local output directory with the given s3 bucket
+        try:
+            subprocess.run(SHELL_PREFIX + f"cp mwas_logging.txt {TEMP_LOCAL_BUCKET}", shell=True)
+        except Exception as e:
+            log_print(f"Error in copying the log file to the local bucket: {e}")
         try:
             command = f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}"
             subprocess.run(SHELL_PREFIX + command, shell=True)
@@ -162,8 +174,10 @@ class Progress:
 
     def update_time(self) -> None:
         """Update the small progress stats"""
-        self.elapsed_time = time.time() - self.start_time
-        self.remaining_time = self.init_est_time - self.elapsed_time if self.init_est_time > 0 else 0
+        def seconds_to_minutes(seconds: float) -> float:
+            return round(seconds / 60, 2)
+        self.elapsed_time = seconds_to_minutes(time.time() - self.start_time)
+        self.remaining_time = seconds_to_minutes(self.init_est_time - self.elapsed_time) if self.init_est_time > 0 else 0
 
     def update_small_progress(self, num_tests_done: int, num_sig_results: int) -> None:
         """Update the small progress stats"""
@@ -717,7 +731,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
 
     # TODO: time & space estimator: get subsets of main_df for all bioprojects to get num groups and num skipped groups
     # and also query all bioprojects to mwas_database to get ref_list length, num metadata tests, and other stuff etc
-    # use that to estimate the number of tests that will be run - useful for scheduling and giving user an idea of how long it will take
+    # use that to estimate the number of tests that will be run - useful for PARALLELIZING and giving user an idea of how long it will take
 
     # ================
     # PROCESSING
@@ -745,7 +759,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
         del biopj_block
 
         # BEGIN PROCESSING THE BIOPROJECTS IN THIS BLOCK
-        if not SCHEDULING:
+        if not PARALLELIZING:
             # PROCESS THE BLOCK
             for biopj in biopj_info_dict.keys():
                 global progress
@@ -783,8 +797,8 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                         log_print(f"There was a problem with making an output file for {biopj}")
                         f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided OR not enough runs provided for this bioproject\n")
 
-        else:  # SCHEDULING
-            # TODO: IMPLEMENT SCHEDULING
+        else:  # PARALLELIZING
+            # TODO: IMPLEMENT PARALLELIZING
             raise NotImplementedError
 
         # now we're done processing an entire block
@@ -877,9 +891,6 @@ def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
                 S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'  # important to have the trailing slash
                 TEMP_LOCAL_BUCKET = f"./{hash_dest}"
                 PROBLEMATIC_BIOPJS_FILE = f"{TEMP_LOCAL_BUCKET}/problematic_biopjs.txt"
-
-                logging.basicConfig(filename=f'{TEMP_LOCAL_BUCKET}/mwas_logging.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
-                log_print(f"Logging to {TEMP_LOCAL_BUCKET}/mwas_logging.log", 0)
 
                 # check if the hash_dest exists in our s3 bucket already (if it does, exit mwas)
                 process = subprocess.run(SHELL_PREFIX + f"s5cmd ls {S3_OUTPUT_DIR}{hash_dest}/", shell=True, stderr=subprocess.PIPE)

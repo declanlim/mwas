@@ -11,7 +11,7 @@
 SERVER_URL="http://ec2-75-101-194-81.compute-1.amazonaws.com:5000/run_mwas"
 S3_BUCKET="s3://serratus-biosamples/mwas_data/"
 CURL_SRC="http://serratus-biosamples.s3.amazonaws.com/mwas_data/"
-RESULTS_DIR="mwas_results_"
+RESULTS_DIR="mwas_results_folder_"
 # IMPORTANT: the arguments should be able to come in any order so we can use $num, but we can do arg then arg + 1 later for things like -r [input_file] since that DOES need to be ordered
 
 # help menu
@@ -84,6 +84,7 @@ MODE:
                             is the code provided from running MWAS.
                             [OPTIONS] specifies what to download. If no options
                             are provided, it will default to the --output option.
+  -ca, --clean-all          Remove all downloaded files and directories
 
 OPTIONS: (used with -g, --get)
   -o, --output              get the MWAS output results csv file
@@ -170,6 +171,9 @@ MODE:
   to download. If no options are provided,
   it will default to the --output option.
 
+  -ca, --clean-all
+  Remove all downloaded files and directories
+
 OPTIONS: (used with -g, --get)
   -o, --output
   get the MWAS output results csv file
@@ -239,6 +243,11 @@ MWAS repository:
 
 EOF
     fi
+    exit 0
+elif [[ $1 == "-ca" || $1 == "--clean-all" ]]; then
+    # remove all downloaded files and directories
+    rm -rf mwas_results_folder_*
+    echo "All downloaded files and directories have been removed."
     exit 0
 elif [[ $1 == "-r" || $1 == "--run" ]]; then
     # check dependencies: jq, csvjson (from csvkit), and prompt user to install if not found
@@ -349,7 +358,7 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
         exit 1
     fi
 
-    if [[ $3 == "-p" || $3 == "--progress" || $3 == "vp" || $3 == "--verbose-progress" ]]; then
+    if [[ $3 == "-p" || $3 == "--progress" || $3 == "-vp" || $3 == "--verbose-progress" ]]; then
         # progress
         report=$(jq '.' progress_report.json)
         printf '=%.0s' $(seq 1 $(tput cols))
