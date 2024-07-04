@@ -9,6 +9,7 @@ import pickle
 import time
 import tracemalloc
 import logging
+import json
 from random import shuffle
 from atexit import register
 from shutil import rmtree
@@ -119,12 +120,82 @@ def log_print(msg: Any, lvl: int = 1) -> None:
 def sync_s3() -> None:
     """Sync the local output directory with the given s3 bucket"""
     if S3_OUTPUT_DIR:
+        # update progress report
+        log_print("Syncing the local output directory with the given s3 bucket...")
+        # check if progress_report.json exists
+        with open(f'{TEMP_LOCAL_BUCKET}/progress_report.json', 'w') as f:
+            PROGRESS.update_time()
+            json_data = PROGRESS.get_progress()
+            json.dump(json_data, f)
+
+        # sync the local output directory with the given s3 bucket
         try:
-            # store the combined output file in s3 and remove the local copy
             command = f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}"
             subprocess.run(SHELL_PREFIX + command, shell=True)
         except Exception as e:
             log_print(f"Error in storing the combined output file in s3: {e}")
+
+
+class Progress:
+    """MWAS progress stats"""
+
+    def __init__(self) -> None:
+        self.progress = 0.0
+        self.start_time = time.time()
+        self.elapsed_time = 0.0
+        self.remaining_time = 0.0
+        self.init_est_time = -1
+        self.init_est_num_tests = -1
+        self.num_tests_done = 0
+        self.num_sig_results = 0
+        self.mwas_processing_stage = 'Pre-processing'
+        self.num_bioprojects = 0
+        self.num_bioprojects_done = 0
+        self.num_ignored_bioprojects = 0
+        self.estimated_already = False
+
+    def set_estimates(self, init_est_time: float, init_est_num_tests: int) -> None:
+        """Set the initial estimates for the progress stats"""
+        self.init_est_time = init_est_time
+        self.init_est_num_tests = init_est_num_tests
+        self.estimated_already = True
+
+    def update_time(self) -> None:
+        """Update the small progress stats"""
+        self.elapsed_time = self.start_time - time.time()
+        self.remaining_time = self.init_est_time - self.elapsed_time if self.init_est_time > 0 else 0
+
+    def update_small_progress(self, num_tests_done: int, num_sig_results: int) -> None:
+        """Update the small progress stats"""
+        self.num_tests_done = num_tests_done
+        self.num_sig_results = num_sig_results
+        self.progress = round(100 * num_tests_done / self.init_est_num_tests, 2)
+
+    def update_large_progress(self, mwas_processing_stage: str,
+                              num_bioprojects: int, num_bioprojects_done: int, num_ignored_bioprojects: int) -> None:
+        """Update the large progress stats"""
+        self.mwas_processing_stage = mwas_processing_stage
+        self.num_bioprojects = num_bioprojects
+        self.num_bioprojects_done = num_bioprojects_done
+        self.num_ignored_bioprojects = num_ignored_bioprojects
+
+    def get_progress(self) -> dict[str, Any]:
+        """Get the progress stats. make sure these match the keys in mwas.sh"""
+        return {
+            'percent_complete': f"{self.progress}%",
+            'elapsed_time': f"{self.elapsed_time} minutes",
+            'remaining_time': f"{self.remaining_time} minutes" if self.remaining_time > 0 else 'calculating...',
+            'initial_time_estimate': f"{self.init_est_time} minutes" if self.init_est_time > 0 else 'calculating...',
+            'initial_num_tests': self.init_est_num_tests if self.init_est_num_tests > 0 else 'calculating...',
+            'num_tests_completed': self.num_tests_done,
+            'num_sig_results': self.num_sig_results,
+            'mwas_processing_stage': self.mwas_processing_stage,
+            'bioprojects_processed': f"{self.num_bioprojects_done}/{self.num_bioprojects}",
+            'bioprojects_ignored': self.num_ignored_bioprojects
+        }
+
+
+PROGRESS = Progress()
 
 
 class BioProjectInfo:
@@ -634,11 +705,12 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     bioprojects_list = main_df['bio_project'].unique()
     shuffle(bioprojects_list)
     num_bioprojects = len(bioprojects_list)
-    global BLOCK_SIZE
+    global BLOCK_SIZE, PROGRESS
     if num_bioprojects < BLOCK_SIZE:
         BLOCK_SIZE = num_bioprojects
     num_blocks = max(1, num_bioprojects // BLOCK_SIZE)
     log_print(f"Number of bioprojects found: {num_bioprojects}, Number of blocks: {num_blocks}", 2)
+    PROGRESS.update_large_progress('Processing', num_bioprojects, 0, 0)
 
     # TODO: time & space estimator: get subsets of main_df for all bioprojects to get num groups and num skipped groups
     # and also query all bioprojects to mwas_database to get ref_list length, num metadata tests, and other stuff etc
@@ -728,7 +800,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
     # concatenate all the output files in the block into one csv (spans multiple bioprojects)
     if COMBINE_OUTPUTS:
         header_is_written = False
-        combined_output_name = f"mwas_output_{date}.csv"
+        combined_output_name = f"mwas_output{'_' + date if not S3_OUTPUT_DIR else ''}.csv"
         for file in os.listdir(OUTPUT_DIR_DISK):
             # make sure the file's date is the same as the date mwas started
             try:
@@ -795,6 +867,39 @@ def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
     elif args[1].endswith('.csv'):
         global logging_level, IMPLICIT_ZEROS, GROUP_NONZEROS_ACCEPTANCE_THRESHOLD, ALREADY_NORMALIZED, P_VALUE_THRESHOLD, ONLY_T_TEST, \
             COMBINE_OUTPUTS, PERFOMANCE_STATS, S3_OUTPUT_DIR, TEMP_LOCAL_BUCKET, PROBLEMATIC_BIOPJS_FILE
+        # s3 storing
+        if '--s3-storing' in args:
+            try:
+                hash_dest = args[args.index('--s3-storing') + 1]
+                S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'  # important to have the trailing slash
+                TEMP_LOCAL_BUCKET = f"./{hash_dest}"
+                PROBLEMATIC_BIOPJS_FILE = f"{TEMP_LOCAL_BUCKET}/problematic_biopjs.txt"
+
+                logging.basicConfig(filename=f'{TEMP_LOCAL_BUCKET}/mwas_logging.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+                log_print(f"Logging to {TEMP_LOCAL_BUCKET}/mwas_logging.log", 0)
+
+                # check if the hash_dest exists in our s3 bucket already (if it does, exit mwas)
+                process = subprocess.run(SHELL_PREFIX + f"s5cmd ls {S3_OUTPUT_DIR}{hash_dest}/", shell=True, stderr=subprocess.PIPE)
+                if not process.stderr:
+                    # this implies we found something successfully via ls, so we should exit
+                    log_print(f"Warning: {hash_dest} already exists in the s3 bucket. Exiting.", 0)
+                    return 0, 'This input has already been processed. Please refer to the s3 bucket for the output.'
+
+                # create local disk folder to sync with s3
+                if not os.path.exists(TEMP_LOCAL_BUCKET):
+                    os.mkdir(TEMP_LOCAL_BUCKET)
+
+                # create the s3 bucket
+                process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}/", shell=True)
+                if process.returncode == 0:
+                    log_print(f"Created s3 bucket: {S3_OUTPUT_DIR}")
+                else:
+                    log_print(f"Error in creating s3 bucket: {S3_OUTPUT_DIR}", 0)
+                    return 1, 'could not create the s3 bucket'
+
+            except Exception as e:
+                log_print(f"Error in setting s3 output directory: {e}", 0)
+                return 1, 'could not set s3 output directory'
         if '--suppress-logging' in args:
             logging_level = 1
         if '--no-logging' in args:
@@ -821,36 +926,6 @@ def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
                 return 1
         if '--performance-stats' in args:
             PERFOMANCE_STATS = True
-        # s3 storing
-        if '--s3-storing' in args:
-            try:
-                hash_dest = args[args.index('--s3-storing') + 1]
-                S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'  # important to have the trailing slash
-                TEMP_LOCAL_BUCKET = f"./{hash_dest}"
-                PROBLEMATIC_BIOPJS_FILE = f"{TEMP_LOCAL_BUCKET}/problematic_biopjs.txt"
-
-                # check if the hash_dest exists in our s3 bucket already (if it does, exit mwas)
-                process = subprocess.run(SHELL_PREFIX + f"s5cmd ls {S3_OUTPUT_DIR}{hash_dest}/", shell=True, stderr=subprocess.PIPE)
-                if not process.stderr:
-                    # this implies we found something successfully via ls, so we should exit
-                    log_print(f"Warning: {hash_dest} already exists in the s3 bucket. Exiting.", 0)
-                    return 0, 'This input has already been processed. Please refer to the s3 bucket for the output.'
-
-                # create local disk folder to sync with s3
-                if not os.path.exists(TEMP_LOCAL_BUCKET):
-                    os.mkdir(TEMP_LOCAL_BUCKET)
-
-                # create the s3 bucket
-                process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}/", shell=True)
-                if process.returncode == 0:
-                    log_print(f"Created s3 bucket: {S3_OUTPUT_DIR}")
-                else:
-                    log_print(f"Error in creating s3 bucket: {S3_OUTPUT_DIR}", 0)
-                    return 1, 'could not create the s3 bucket'
-
-            except Exception as e:
-                log_print(f"Error in setting s3 output directory: {e}", 0)
-                return 1, 'could not set s3 output directory'
 
         try:  # reading the input file
             input_df = pd.read_csv(args[1])  # arg1 is a file path
