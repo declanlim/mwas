@@ -137,8 +137,10 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
     hash=$(echo -n "$JSON_DATA" | md5sum | awk '{ print $1 }')
     JSON_DATA=$(echo $JSON_DATA | jq --arg hash "$hash" '. + {dest: $hash}')
 
-    echo "Running MWAS..."
-    echo "Storing MWAS output in s3 bucket: s3://serratus-biosamples/mwas_data/$hash"
+    echo "===================================================================="
+    echo "Storing MWAS output here:"
+    echo "s3://serratus-biosamples/mwas_data/$hash"
+    echo "===================================================================="
 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)

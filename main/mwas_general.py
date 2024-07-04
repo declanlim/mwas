@@ -834,7 +834,7 @@ def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
                 if not process.stderr:
                     # this implies we found something successfully via ls, so we should exit
                     log_print(f"Warning: {hash_dest} already exists in the s3 bucket. Exiting.", 0)
-                    return 0, 'this_input_was_already_processed'
+                    return 0, 'This input has already been processed. Please refer to the s3 bucket for the output.'
 
                 # create local disk folder to sync with s3
                 if not os.path.exists(TEMP_LOCAL_BUCKET):
