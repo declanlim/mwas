@@ -34,24 +34,24 @@ if [[ $1 == "-h" || $1 == "--help" || $# -eq 0 ]]; then
     cat << EOF
 
 AAAAAAAA               AAAAAAAA  CCCCCCCC                           CCCCCCCC     GGG                  TTTTTTTTTTTTTTT
-A.......A             A.......A  C......C                           C......C    G...G               TT...............T
-A........A           A........A  C......C                           C......C   G.....G             T.....TTTTTT......T
-A.........A         A.........A  C......C                           C......C  G.......G            T.....T     TTTTTTT
-A::::::::::A       A::::::::::A   C:::::C           CCCCC           C:::::C  G:::::::::G           T:::::T
+A.......A             A.......A  C......C                           C......C    G...G               TT...............TT
+A........A           A........A  C......C                           C......C   G.....G             T..................T
+A.........A         A.........A  C......C                           C......C  G.......G            T......TTTTTTT.....T
+A::::::::::A       A::::::::::A   C:::::C           CCCCC           C:::::C  G:::::::::G           T:::::T      TTTTTTT
 A:::::::::::A     A:::::::::::A    C:::::C         C:::::C         C:::::C  G:::::G:::::G          T:::::T
-A:::::::A::::A   A::::A:::::::A     C:::::C       C:::::::C       C:::::C  G:::::G G:::::G          T::::TTTT
-A::::::A A::::A A::::A A::::::A      C:::::C     C:::::::::C     C:::::C  G:::::G   G:::::G          TT::::::TTTTT
-A||||||A  A||||A||||A  A||||||A       C|||||C   C|||||C|||||C   C|||||C  G|||||G     G|||||G           TTT||||||||TT
-A||||||A   A|||||||A   A||||||A        C|||||C C|||||C C|||||C C|||||C  G|||||GGGGGGGGG|||||G             TTTTTT||||T
-A||||||A    A|||||A    A||||||A         C|||||C|||||C   C|||||C|||||C  G|||||||||||||||||||||G                 T|||||T
-A||||||A     AAAAA     A||||||A          C|||||||||C     C|||||||||C  G|||||GGGGGGGGGGGGG|||||G                T|||||T
-AIIIIIIA               AIIIIIIA           CIIIIIIIC       CIIIIIIIC  GIIIIIG             GIIIIIG   TTTTTTT     TIIIIIT
-AIIIIIIA               AIIIIIIA            CIIIIIC         CIIIIIC  GIIIIIG               GIIIIIG  TIIIIIITTTTTTIIIIIT
-AIIIIIIA               AIIIIIIA             CIIIC           CIIIC  GIIIIIG                 GIIIIIG TIIIIIIIIIIIIIIITT
-AAAAAAAA               AAAAAAAA              CCC             CCC  GGGGGGG                   GGGGGGG TTTTTTTTTTTTTTT
+A:::::::A::::A   A::::A:::::::A     C:::::C       C:::::::C       C:::::C  G:::::G G:::::G         T::::::TTTTTTT
+A::::::A A::::A A::::A A::::::A      C:::::C     C:::::::::C     C:::::C  G:::::G   G:::::G         TT:::::::::::TTT
+A||||||A  A||||A||||A  A||||||A       C|||||C   C|||||C|||||C   C|||||C  G|||||G     G|||||G          TTT|||||||||||TT
+A||||||A   A|||||||A   A||||||A        C|||||C C|||||C C|||||C C|||||C  G|||||GGGGGGGGG|||||G            TTTTTTT||||||T
+A||||||A    A|||||A    A||||||A         C|||||C|||||C   C|||||C|||||C  G|||||||||||||||||||||G                  T|||||T
+A||||||A     AAAAA     A||||||A          C|||||||||C     C|||||||||C  G|||||GGGGGGGGGGGGG|||||G    TTTTTTT      T|||||T
+AIIIIIIA               AIIIIIIA           CIIIIIIIC       CIIIIIIIC  GIIIIIG             GIIIIIG   TIIIIITTTTTTTTIIIIIT
+AIIIIIIA               AIIIIIIA            CIIIIIC         CIIIIIC  GIIIIIG               GIIIIIG  TIIIIIIIIIIIIIIIIIIT
+AIIIIIIA               AIIIIIIA             CIIIC           CIIIC  GIIIIIG                 GIIIIIG TTIIIIIIIIIIIIIIITT
+AAAAAAAA               AAAAAAAA              CCC             CCC  GGGGGGG                   GGGGGGG  TTTTTTTTTTTTTTT
 
-  Metadata Wide Association Study (MWAS)
-  Version: 1.0.0
+Metadata Wide Association Study (MWAS)
+Version: 1.0.0
 
 
 Usage: mwas [OPTIONS] [MWAS FLAGS]
@@ -143,11 +143,18 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
     rm request.json
+
     # read response message and if it says with exit code 0, tell user's MWAS finished successfully otherwise, say there was an issue processing the input
-    if [[ $response == *"Error"* ]]; then
-        echo "Error: $response"
+    message=$(echo $response | jq -r '.message')
+    status=$(echo $response | jq -r '.status')
+    error=$(echo $response | jq -r '.error')
+
+    # check if the response contains an error message
+    if [[ $error != "null" ]]; then
+        echo "Error: $error"
         exit 1
     else
-        echo "MWAS finished successfully."
+        echo "$message"
+        echo "$status"
     fi
 fi

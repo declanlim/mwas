@@ -44,17 +44,18 @@ def run():
         try:
             # turn flags into a list
             flags = flags.split(" ")
-            status = mwas_general.main(['server.py', temp_csv_filepath, "--s3-storing", destination] + flags, True)
+            status, message = mwas_general.main(['server.py', temp_csv_filepath, "--s3-storing", destination] + flags, True)
         except Exception as e:
             status = 1
-            logging.error("Error running MWAS: %s", e)
+            message = f"Error running MWAS: {e}"
+            logging.error(message)
 
         logging.info("MWAS process finished with exit code %s", status)
         # Remove the temporary file
         os.remove(temp_csv_filepath)
         logging.info("Temporary file removed: %s", temp_csv_filepath)
 
-        return jsonify({"message": f"MWAS process finished with exit code {status}"})
+        return jsonify({"message": message, "status": f"MWAS process finished with exit code {status}"})
 
     except Exception as e:
         logging.error("Error processing request: %s", e)

@@ -779,7 +779,7 @@ def cleanup(mount_tmpfs: MountTmpfs) -> Any:
 #     return [x for x in tracemalloc.take_snapshot().traces._traces if 'mwas_general' in x[2][0][0]]
 
 
-def main(args: list[str], using_logging=False) -> int | None:
+def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
     """Main function to run MWAS on the given data file"""
     num_args = len(args)
     time_start = time.time()
@@ -824,9 +824,17 @@ def main(args: list[str], using_logging=False) -> int | None:
         # s3 storing
         if '--s3-storing' in args:
             try:
+                hash_dest = args[args.index('--s3-storing') + 1]
                 S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'  # important to have the trailing slash
-                TEMP_LOCAL_BUCKET = f"./{args[args.index('--s3-storing') + 1]}"
+                TEMP_LOCAL_BUCKET = f"./{hash_dest}"
                 PROBLEMATIC_BIOPJS_FILE = f"{TEMP_LOCAL_BUCKET}/problematic_biopjs.txt"
+
+                # check if the hash_dest exists in our s3 bucket already (if it does, exit mwas)
+                process = subprocess.run(SHELL_PREFIX + f"s5cmd ls {S3_OUTPUT_DIR}{hash_dest}/", shell=True, stderr=subprocess.PIPE)
+                if not process.stderr:
+                    # this implies we found something successfully via ls, so we should exit
+                    log_print(f"Warning: {hash_dest} already exists in the s3 bucket. Exiting.", 0)
+                    return 0, 'this_input_was_already_processed'
 
                 # create local disk folder to sync with s3
                 if not os.path.exists(TEMP_LOCAL_BUCKET):
@@ -838,11 +846,11 @@ def main(args: list[str], using_logging=False) -> int | None:
                     log_print(f"Created s3 bucket: {S3_OUTPUT_DIR}")
                 else:
                     log_print(f"Error in creating s3 bucket: {S3_OUTPUT_DIR}", 0)
-                    return 1
+                    return 1, 'could not create the s3 bucket'
 
             except Exception as e:
                 log_print(f"Error in setting s3 output directory: {e}", 0)
-                return 1
+                return 1, 'could not set s3 output directory'
 
         try:  # reading the input file
             input_df = pd.read_csv(args[1])  # arg1 is a file path
@@ -855,7 +863,7 @@ def main(args: list[str], using_logging=False) -> int | None:
             # assume it has three columns: run, group, quantifier. And the group and quantifier columns have special names
             if len(input_df.columns) != 3:
                 log_print("Data file must have three columns in this order: <run>, <group>, <quantifier>", 0)
-                return 1
+                return 1, 'invalid data file'
 
             # attempt to correct column types so the next if block doesn't exit us
             input_df['run'] = input_df['run'].astype(str)
@@ -869,7 +877,7 @@ def main(args: list[str], using_logging=False) -> int | None:
                 return 1
         except FileNotFoundError:
             log_print("File not found", 0)
-            return 1
+            return 1, 'file not found'
 
         # MOUNT TMPFS
         mount_tmpfs = MountTmpfs()
@@ -888,7 +896,8 @@ def main(args: list[str], using_logging=False) -> int | None:
         log_print("MWAS completed successfully", 0)
 
         # print(display_memory())
-        log_print(f"Time taken: {round((time.time() - time_start) / 60, 3)} minutes", 0)
+        time_taken = round((time.time() - time_start) / 60, 3)
+        log_print(f"Time taken: {time_taken} minutes", 0)
 
         # =================
         # DONE
@@ -903,11 +912,10 @@ def main(args: list[str], using_logging=False) -> int | None:
             rmtree(TEMP_LOCAL_BUCKET)
             print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
 
-        return 0
-
+        return 0, f'MWAS completed successfully. Time taken: {time_taken} minutes'
     else:
         log_print("Invalid arguments", 0)
-        return 1
+        return 1, 'invalid arguments'
 
 
 if __name__ == '__main__':
