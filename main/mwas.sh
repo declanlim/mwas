@@ -127,15 +127,17 @@ elif [[ $1 == "-r" || $1 == "--run" || $1 == "-rd" || $1 == "--run-download" || 
 
     # jsonify the input file to send to the server (it will be reconstructed as a csv on the server)
     CSV_FILE=$2
-    csvjson $CSV_FILE | jq . > request.json
+    echo "Preparing request to send to MWAS server..."
+    CSV_CONTENT=$(base64 $CSV_FILE)
+
     # create JSON object with data and flags
-    JSON_DATA=$(jq -n --arg flags "$FLAGS" --argjson data "$(cat request.json)" '{data: $data, flags: $flags}')
+    JSON_DATA=$(jq -n --arg flags "$FLAGS" --arg data "$CSV_CONTENT" '{data: $data, flags: $flags}')
 
     # hash the JSON_DATA to check if the request has already been made and predetermine the response's location
     hash=$(echo -n "$JSON_DATA" | md5sum | awk '{ print $1 }')
     JSON_DATA=$(echo $JSON_DATA | jq --arg hash "$hash" '. + {dest: $hash}')
 
-    echo "Storing MWAS output in s3 bucket: s3://serratus-biosamples/mwas_data/$hash"
+    echo "Storing MWAS output here: s3://serratus-biosamples/mwas_data/$hash"
 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)

@@ -1,7 +1,4 @@
 """server for other users to run mwas remotely"""
-import csv
-import json
-
 from flask import Flask, request, jsonify
 import os
 import logging
@@ -26,16 +23,13 @@ def run():
         # Create a temporary file to store the CSV data
         with open('temp_input_from_request.csv', mode='w') as temp_csv_file:
             try:
-                json_data = request.json.get('data')
+                base64_data = request.json.get('data')
+                csv_content = base64_data.split(",")[1]
             except Exception as e:
                 logging.error("Error decoding data: %s", e)
                 return jsonify({"error": str(e)}), 500
 
-            writer = csv.writer(temp_csv_file)
-            writer.writerow(json_data[0].keys())
-
-            for row in json_data:
-                writer.writerow(row.values())
+            temp_csv_file.write(csv_content)
 
         temp_csv_filepath = os.path.abspath(temp_csv_file.name)
 
