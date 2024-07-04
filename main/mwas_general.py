@@ -162,7 +162,7 @@ class Progress:
 
     def update_time(self) -> None:
         """Update the small progress stats"""
-        self.elapsed_time = self.start_time - time.time()
+        self.elapsed_time = time.time() - self.start_time
         self.remaining_time = self.init_est_time - self.elapsed_time if self.init_est_time > 0 else 0
 
     def update_small_progress(self, num_tests_done: int, num_sig_results: int) -> None:
@@ -175,6 +175,9 @@ class Progress:
                               num_bioprojects: int, num_bioprojects_done: int, num_ignored_bioprojects: int) -> None:
         """Update the large progress stats"""
         self.mwas_processing_stage = mwas_processing_stage
+        if self.mwas_processing_stage == 'Completed':
+            self.remaining_time = 0
+            self.progress = 100
         self.num_bioprojects = num_bioprojects
         self.num_bioprojects_done = num_bioprojects_done
         self.num_ignored_bioprojects = num_ignored_bioprojects
@@ -973,6 +976,8 @@ def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
         # print(display_memory())
         time_taken = round((time.time() - time_start) / 60, 3)
         log_print(f"Time taken: {time_taken} minutes", 0)
+
+        PROGRESS.update_large_progress('Completed', PROGRESS.num_bioprojects, 0, 0)
 
         # =================
         # DONE

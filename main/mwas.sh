@@ -10,12 +10,14 @@
 
 SERVER_URL="http://ec2-75-101-194-81.compute-1.amazonaws.com:5000/run_mwas"
 S3_BUCKET="s3://serratus-biosamples/mwas_data/"
+CURL_SRC="http://serratus-biosamples.s3.amazonaws.com/mwas_data/"
 RESULTS_DIR="mwas_results_"
 # IMPORTANT: the arguments should be able to come in any order so we can use $num, but we can do arg then arg + 1 later for things like -r [input_file] since that DOES need to be ordered
 
 # help menu
 if [[ $1 == "-h" || $1 == "--help" || $# -eq 0 ]]; then
-    cat << EOF
+    if [[ $(tput cols) -gt 118 ]]; then
+        cat << EOF
 
 AAAAAAAA               AAAAAAAA  CCCCCCCC                           CCCCCCCC     GGG                  TTTTTTTTTTTTTTT
 A.......A             A.......A  C......C                           C......C    G...G               TT...............TT
@@ -34,6 +36,21 @@ AIIIIIIA               AIIIIIIA            CIIIIIC         CIIIIIC  GIIIIIG     
 AIIIIIIA               AIIIIIIA             CIIIC           CIIIC  GIIIIIG                 GIIIIIG TTIIIIIIIIIIIIIIITT
 AAAAAAAA               AAAAAAAA              CCC             CCC  GGGGGGG                   GGGGGGG  TTTTTTTTTTTTTTT
 
+EOF
+    else
+        cat << EOF
+
+ __  ____          __      _____
+|  \/  \ \        / /\    / ____|
+| \  / |\ \  /\  / /  \  | (___
+| |\/| | \ \/  \/ / /\ \  \___ \\
+| |  | |  \  /\  / ____ \ ____) |
+|_|  |_|   \/  \/_/    \_\_____/
+
+EOF
+    fi
+    if [[ $(tput cols) -gt 82 ]]; then
+        cat << EOF
 Metadata Wide Association Study (MWAS)
 Version: 1.0.0
 
@@ -102,7 +119,126 @@ MWAS_FLAGS: (used with -r, --run)
                             is to exclude them; recommended developer use only)
 
 MWAS repository: <https://github.com/declanlim/mwas_rfam>
+
 EOF
+    else
+      # small logo to fit in smaller terminal windows
+      cat << EOF
+Metadata Wide Association Study (MWAS)
+Version: 1.0.0
+
+Usage: mwas [MODE] [ARGUMENTS]
+
+MWAS_FLAGS:
+flags to customize the MWAS run.
+See below for available flags.
+
+SESSION_CODE:
+Unique code provided by MWAS server
+when starting MWAS.
+Used to download results, check progress, etc.
+
+INPUT_FILE:
+path to input file. Format: CSV, with 3 columns.
+headers can be named anything,
+but must follow the format below:
+csv column order: accession, group, quantification
+column types: STRING, STRING or INT, INT
+
+Example:
+  run,family_name,n_reads
+  ERR2756783,Deltavirus,1
+  ERR2756784,Bromoviridae,1
+  ERR2756784,Mitoviridae,1
+  ERR2756785,Totiviridae,3
+  ERR2756786,Mitoviridae,4
+
+MODE:
+  -h, --help
+  display this help menu and exit
+
+  -r, --run [INPUT_FILE] [MWAS_FLAGS]...
+  run MWAS with the specified input file,
+  without downloading anything afterwards.
+  Provides a session code relative
+  to your input
+
+  -g, --get [SESSION_CODE] [OPTIONS]...
+  download results from MWAS run,
+  where [SESSION_CODE] is the code provided
+  from running MWAS. [OPTIONS] specifies what
+  to download. If no options are provided,
+  it will default to the --output option.
+
+OPTIONS: (used with -g, --get)
+  -o, --output
+  get the MWAS output results csv file
+  (will not return anything
+  if MWAS is still running)
+
+  -l, --log
+  get the MWAS run logs
+  (verbosity depends on the
+  MWAS_FLAGS you set)
+
+  -ib, --ignored-biopjs
+  Download the list of ignored bioprojects
+
+  -p, --progress
+  Report progress of an MWAS run.
+  Will report percentage of completion,
+  elapsed_time and time_remaining
+
+  -vp, --verbose-progress
+  Report progress of an MWAS run
+  in verbose mode (provides more detailed
+  information than --progress)
+
+  -a, --all
+  Download everything associated
+  with the MWAS run (output, log,
+  progress report, and ignored bioprojects)
+
+MWAS_FLAGS: (used with -r, --run)
+  --suppress-logging
+  Suppress logging (default is verbose logging)
+
+  --no-logging
+  No logging (overrides --suppress-logging)
+
+  --t-test-only
+  Only run t-tests (not recommended)
+
+  --already-normalized
+  Input file quantifications are already
+  normalized (default is to normalize using
+  spots from serratus's logan database)
+
+  --explicit-zeros
+  Quantifications of 0 are only included
+  in the analysis if they are explicitly stated
+  in the input file (default is implicit zeros)
+
+  --p-value-threshold [FLOAT]
+  Set the p-value threshold for significance
+  (default is 0.005)
+
+  --group-nonzero-threshold [INT]
+  Set the minimum number of non-zero
+  quantifications in a group for it to be
+  included in the analysis (default is 3;
+  useless when --explicit-zeros is set)
+
+  --performance-stats
+  Include performance statistics in the log
+  (default is to exclude them;
+  recommended developer use only)
+
+MWAS repository:
+<https://github.com/declanlim/mwas_rfam>
+
+EOF
+    fi
     exit 0
 elif [[ $1 == "-r" || $1 == "--run" ]]; then
     # check dependencies: jq, csvjson (from csvkit), and prompt user to install if not found
@@ -157,13 +293,13 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     hash=$(echo -n "$JSON_DATA" | md5sum | awk '{ print $1 }')
     JSON_DATA=$(echo $JSON_DATA | jq --arg hash "$hash" '. + {dest: $hash}')
 
-    echo "================================="
-    echo "       MWAS SESSION CODE:"
-    echo "$hash/"
-    echo "================================="
+    echo "================================"
+    echo "      MWAS SESSION CODE:"
+    echo "$hash"
+    echo "================================"
 
     # set up directory to store results
-    results_dir = "$RESULTS_DIR$hash"
+    results_dir="$RESULTS_DIR$hash"
     if [[ ! -d $results_dir ]]; then
         mkdir $results_dir
     fi
@@ -194,43 +330,49 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
 
     # get session code
     SESSION_CODE=$2
-    echo "Downloading results for MWAS session: $SESSION_CODE"
 
     #  directory to store results
-    results_dir = "$RESULTS_DIR$SESSION_CODE"
+    results_dir="$RESULTS_DIR$SESSION_CODE"
     if [[ ! -d $results_dir ]]; then
         mkdir $results_dir
     fi
     cd $results_dir
 
     # check if session code exists via progress report since that is always available if running
-    report=$(curl -s $S3_BUCKET$SESSION_CODE/progress_report.json)
-    DNE=$(echo $report | grep "The specified key does not exist" | wc -l)
+    report=$(curl -s -o progress_report.json $CURL_SRC$SESSION_CODE/progress_report.json)
+    DNE=$(cat progress_report.json | grep "The specified key does not exist" | wc -l)
     if [[ $DNE -eq 1 ]]; then
         echo "Error: session code does not exist"
+        rm progress_report.json
+        cd ..
+        rmdir $results_dir
         exit 1
     fi
 
     if [[ $3 == "-p" || $3 == "--progress" || $3 == "vp" || $3 == "--verbose-progress" ]]; then
         # progress
+        report=$(jq '.' progress_report.json)
+        printf '=%.0s' $(seq 1 $(tput cols))
+        echo "MWAS PROGRESS REPORT:"
         echo "Percent complete: $(echo $report | jq -r '.percent_complete' 2>/dev/null)"
         echo "elapsed time: $(echo $report | jq -r '.elapsed_time' 2>/dev/null)"
         echo "time remaining: $(echo $report | jq -r '.remaining_time' 2>/dev/null)"
-    fi
-    if [[ $3 == "-vp" || $3 == "--verbose-progress" ]]; then
-        # verbose progress
-        echo "initial time estimate: $(echo $report | jq -r '.initial_time_estimate' 2>/dev/null)"
-        echo "initial number of tests estimate: $(echo $report | jq -r '.initial_num_tests' 2>/dev/null)"
-        echo "MWAS processing stage: $(echo $report | jq -r '.mwas_processing_stage' 2>/dev/null)"
-        echo "Number of tests completed: $(echo $report | jq -r '.num_tests_completed' 2>/dev/null)"
-        echo "Number of significant results found: $(echo $report | jq -r '.num_sig_results' 2>/dev/null)"
-        echo "Bioprojects processed: $(echo $report | jq -r '.bioprojects_processed' 2>/dev/null)"
-        echo "Number of bioprojects ignored: $(echo $report | jq -r '.bioprojects_ignored' 2>/dev/null)"
+        if [[ $3 == "-vp" || $3 == "--verbose-progress" ]]; then
+            # verbose progress
+            echo "initial time estimate: $(echo $report | jq -r '.initial_time_estimate' 2>/dev/null)"
+            echo "initial number of tests estimate: $(echo $report | jq -r '.initial_num_tests' 2>/dev/null)"
+            echo "MWAS processing stage: $(echo $report | jq -r '.mwas_processing_stage' 2>/dev/null)"
+            echo "Number of tests completed: $(echo $report | jq -r '.num_tests_completed' 2>/dev/null)"
+            echo "Number of significant results found: $(echo $report | jq -r '.num_sig_results' 2>/dev/null)"
+            echo "Bioprojects processed: $(echo $report | jq -r '.bioprojects_processed' 2>/dev/null)"
+            echo "Number of bioprojects ignored: $(echo $report | jq -r '.bioprojects_ignored' 2>/dev/null)"
+        fi
+        printf '=%.0s' $(seq 1 $(tput cols))
     fi
 
-    if [[ $3 == "-l" || $3 == "--log" || $3 == "-a" || $3 == "--all"]]; then
+    if [[ $3 == "-l" || $3 == "--log" || $3 == "-a" || $3 == "--all" ]]; then
         # download log file
-        curl -o mwas_log.txt -s $S3_BUCKET$SESSION_CODE/mwas_logging.log
+        curl -o mwas_log.txt -s $CURL_SRC$SESSION_CODE/mwas_logging.log
         failed=$(cat mwas_log.txt | grep "The specified key does not exist" | wc -l)
         if [[ $failed -eq 1 ]]; then
             echo "Error: There was no log file."
@@ -238,30 +380,31 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
             echo "Log file downloaded."
         fi
     fi
-    if [[ $3 == "-ib" || $3 == "--ignored-biopjs" || $3 == "-a" || $3 == "--all"]]; then
+    if [[ $3 == "-ib" || $3 == "--ignored-biopjs" || $3 == "-a" || $3 == "--all" ]]; then
         # download ignored bioprojects file
-        curl -o ignored_bioprojects.txt -s $S3_BUCKET$SESSION_CODE/ignored_bioprojects.txt
+        curl -o ignored_bioprojects.txt -s $CURL_SRC$SESSION_CODE/problematic_biopjs.txt
         failed=$(cat ignored_bioprojects.txt | grep "The specified key does not exist" | wc -l)
         if [[ $failed -eq 1 ]]; then
             echo "Error: There was no ignored bioprojects list."
         else
-            echo "Ignored bioprojects list downloaded."
+            echo "Ignored_bioprojects list downloaded."
         fi
     fi
     if [[ $3 == "-o" || $3 == "--output" || $3 == "-a" || $3 == "--all" || $3 == "" ]]; then
-        # download output file
-        curl -o mwas_output.csv -s $S3_BUCKET$SESSION_CODE/mwas_output.csv
-        # check if success
-        failed=$(cat mwas_output.csv | grep "The specified key does not exist" | wc -l)
-        if [[ $failed -eq 1 ]]; then
-            echo "Error: MWAS is still running. Could not download results yet."
+        # check if it's already downloaded
+        if [[ -f mwas_output.csv ]]; then
+            echo "MWAS output was already downloaded."
         else
-            echo "MWAS output downloaded."
+            # download output file
+            curl -o mwas_output.csv -s $CURL_SRC$SESSION_CODE/mwas_output.csv
+            # check if success
+            failed=$(cat mwas_output.csv | grep "The specified key does not exist" | wc -l)
+            if [[ $failed -eq 1 ]]; then
+                echo "Error: MWAS is still running. Could not download results yet."
+            else
+                echo "MWAS output downloaded."
+            fi
         fi
     fi
-    if [[ $3 == "-a" || $3 == "--all" ]]; then
-        # download progress report
-        cat $report > progress_report.json
-        echo "Progress report downloaded."
-    fi
-    cd -
+    cd ..
+fi
