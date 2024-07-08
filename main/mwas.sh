@@ -297,6 +297,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     csvjson $CSV_FILE | jq . > request.json
     # create JSON object with data and flags
     JSON_DATA=$(jq -n --arg flags "$FLAGS" --argjson data "$(cat request.json)" '{data: $data, flags: $flags}')
+    rm request.json
 
     # hash the JSON_DATA to check if the request has already been made and predetermine the response's location
     hash=$(echo -n "$JSON_DATA" | md5sum | awk '{ print $1 }')
@@ -315,7 +316,6 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
-    rm request.json
 
     # read response message and if it says with exit code 0, tell user's MWAS finished successfully otherwise, say there was an issue processing the input
     message=$(echo $response | jq -r '.message')
@@ -381,7 +381,7 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
 
     if [[ $3 == "-l" || $3 == "--log" || $3 == "-a" || $3 == "--all" ]]; then
         # download log file
-        curl -o mwas_log.txt -s $CURL_SRC$SESSION_CODE/mwas_logging.log
+        curl -o mwas_log.txt -s $CURL_SRC$SESSION_CODE/mwas_logging.txt
         failed=$(cat mwas_log.txt | grep "The specified key does not exist" | wc -l)
         if [[ $failed -eq 1 ]]; then
             echo "Error: There was no log file."

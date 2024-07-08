@@ -11,7 +11,7 @@ BLACKLIST = {"PRJEB37886", "PRJNA514245", "PRJNA716984", "PRJNA731148", "PRJNA63
 # 23 bioprojects that are over 100MB in size (original csv)
 
 
-def process_file(_metadata_file, source, _storage):
+def process_file(_metadata_file, source, _storage) -> tuple[int, int, float, str, int, int, int, set]:
     """processing file (load csv to df, convert to set-form (condensed for MWAS), """
     # set up
     original_file = f"{source}/{_metadata_file}"
@@ -21,28 +21,28 @@ def process_file(_metadata_file, source, _storage):
     if _size == 1:
         with open(new_file, 'wb') as f:
             f.write(b'0')
-        return _size, 1, time.time() - start_time, "Original csv was empty.", 0, 0, 0
+        return _size, 1, time.time() - start_time, "Original csv was empty.", 0, 0, 0, set()
     elif bioproject in BLACKLIST:
         with open(new_file, 'wb') as f:
             f.write(b'1')
-        return _size, 1, time.time() - start_time, "Bioproject is in the blacklist.", 0, 0, 0
+        return _size, 1, time.time() - start_time, "Bioproject is in the blacklist.", 0, 0, 0, set()
     try:
         metadata_dataframe = pd.read_csv(original_file, low_memory=False)
     except Exception as e:
-        return os.path.getsize(original_file), 0, time.time() - start_time, f"FAILED - csv reading: {e}", 0, 0, 0
+        return os.path.getsize(original_file), 0, time.time() - start_time, f"FAILED - csv reading: {e}", 0, 0, 0, set()
 
     # check if metadata_dataframe is empty
     if metadata_dataframe.shape[0] < 4:  # because it's impossible to do a meaningful test with less than 4 entities
         with open(new_file, 'wb') as f:
             f.write(b'0')
-        return _size, 1, time.time() - start_time, "Less than 4 rows in csv file => empty file.", metadata_dataframe.shape[0], 0, 0
+        return _size, 1, time.time() - start_time, "Less than 4 rows in csv file => empty file.", metadata_dataframe.shape[0], 0, 0, set()
 
     # convert metadata to condensed set form
     try:
         biosamples_ref, set_df, _comment, _, is_empty = metadata_to_set_accession(metadata_dataframe)
     except Exception as e:
         print(f"Error processing {_metadata_file}: {e}")
-        return _size, 0, time.time() - start_time, f"FAILED - condensing: {e}", metadata_dataframe.shape[0], 0, 0
+        return _size, 0, time.time() - start_time, f"FAILED - condensing: {e}", metadata_dataframe.shape[0], 0, 0, set()
 
     # pickle the biosamples_ref and set_df into 1 file. Don't worry about other file data for now
     # create the new file in dir called storage
@@ -58,7 +58,7 @@ def process_file(_metadata_file, source, _storage):
 
     if _size == 8917 and _pickle_size == 2122:
         _comment += "Very likely to be a dupe-bug file."
-    return _size, _pickle_size, time.time() - start_time, _comment, len(biosamples_ref), set_df.shape[0], set_df[set_df['test_type'] == 'permutation-test'].shape[0]
+    return _size, _pickle_size, time.time() - start_time, _comment, len(biosamples_ref), set_df.shape[0], set_df[set_df['test_type'] == 'permutation-test'].shape[0], set(set_df['attributes'])
 
 
 if __name__ == '__main__':
@@ -99,17 +99,24 @@ if __name__ == '__main__':
             if not files:
                 print("No files found to process.")
 
+            fields = set()
+
             for file in files:
                 file = file.replace('\n', '')
                 bioproject = file.split('/')[-1][:-4]
                 print(f"Processing {bioproject}...")
                 if file.endswith('.csv'):
                     try:
-                        size, pickle_size, conversion_time, comment, num_biosamples, num_sets, num_permutation_sets = process_file(f"{file}", arg1, storage)
+                        size, pickle_size, conversion_time, comment, num_biosamples, num_sets, num_permutation_sets, field_names = process_file(f"{file}", arg1, storage)
                         results_f.write(f"{bioproject},{size},{pickle_size},{conversion_time},{comment},{num_biosamples},{num_sets},{num_permutation_sets}\n")
                         print(f"Processed {bioproject} in {conversion_time} seconds.")
+                        fields.update(field_names)
                     except Exception as e:
                         print(f"Failed to process {bioproject} due to error: {e}")
                         results_f.write(f"{bioproject},{os.path.getsize(f'{arg1}/{file}')},0,0,FAILED - misc error: {e}\n,0,0,0\n")
                         errors_f.write(f"{bioproject},{e}\n")
+
+            # record fields to file in form {field1, field2, field3}
+            with open('fields.txt', 'w') as fields_f:
+                fields_f.write(str(fields))
     print("Conversion complete.")

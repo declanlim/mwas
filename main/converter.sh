@@ -15,10 +15,8 @@ fi
 local_destination=~/raw_metadata_csvs
 echo "set up dirs"
 
-S3_RAW_METADATA_DIR=s3://serratus-biosamples/bioprojects_csv/
-S3_CONDENSED_METADATA_DIR=s3://serratus-biosamples/condensed-bioproject-metadata/
-
 if [ "$1" == "-s" ]; then
+    S3_CONDENSED_METADATA_DIR=s3://serratus-biosamples/condense-test/
     if [ "$2" ]; then
         subset_size=$2
     else
@@ -67,6 +65,8 @@ if [ "$1" == "-s" ]; then
     rm ${disk_files_name}
 
 elif [ "$1" == "-f" ]; then
+    S3_CONDENSED_METADATA_DIR=s3://serratus-biosamples/condensed-bioproject-metadata/
+
     s5cmd sync ${S3_RAW_METADATA_DIR}/ ${local_destination}
     echo "completed copying raw csv files from s3 to local disk"
 
