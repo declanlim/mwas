@@ -56,7 +56,7 @@ def process_file(_metadata_file, source, _storage) -> tuple[int, int, float, str
 
     _pickle_size = 1 if is_empty else os.path.getsize(new_file)
 
-    if _size == 8917 and _pickle_size == 2122:
+    if _size == 8917 and _pickle_size == 2241 and len(biosamples_ref) == 22:
         _comment += "Very likely to be a dupe-bug file."
     return _size, _pickle_size, time.time() - start_time, _comment, len(biosamples_ref), set_df.shape[0], set_df[set_df['test_type'] == 'permutation-test'].shape[0], set(set_df['attributes'])
 
@@ -112,6 +112,8 @@ if __name__ == '__main__':
                 if file.endswith('.csv'):
                     try:
                         size, pickle_size, conversion_time, comment, num_biosamples, num_sets, num_permutation_sets, field_names = process_file(f"{file}", src, storage)
+                        if comment == '':
+                            comment = 'No issues.'
                         results_f.write(f"{bioproject},{size},{pickle_size},{conversion_time},{comment},{num_biosamples},{num_sets},{num_permutation_sets}\n")
                         print(f"Processed {bioproject} in {conversion_time} seconds.")
                         fields.update(field_names)
@@ -123,4 +125,13 @@ if __name__ == '__main__':
             # record fields to file in form {field1, field2, field3}
             with open('fields.txt', 'w') as fields_f:
                 fields_f.write(str(fields))
+
+            # split every element in fields by ';' to get actual fields
+            actual_fields = set()
+            for field in fields:
+                actual_fields.update(str(field).split(';'))
+            # strip whitespace
+            actual_fields = {field.strip() for field in actual_fields}
+            with open('actual_fields.txt', 'w') as actual_fields_f:
+                actual_fields_f.write(str(actual_fields))
     print("Conversion complete.")

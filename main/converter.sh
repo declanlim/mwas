@@ -12,6 +12,8 @@ if [ ! -d ~/converted_metadata_pickles ]; then
         mkdir converted_metadata_pickles
         cd -
 fi
+
+
 local_destination=~/raw_metadata_csvs
 S3_RAW_METADATA_DIR=s3://serratus-biosamples/bioprojects_csv/
 local_condensing_destination=~/converted_metadata_pickles
@@ -61,10 +63,22 @@ if [[ "$1" == "-s" || "$1" == "-st" ]]; then
         echo "completed copying raw csv files from s3 to local disk"
         rm ${cp_file_name}
     else
+        if [ ! -d ~/converted_metadata_pickles_testing ]; then
+            cd ~
+            mkdir converted_metadata_pickles_testing
+            cd -
+        fi
+
         # sample randomly directly from local disk
-        ls ${local_destination} | sort -R | head -n ${subset_size} > ${disk_files_name}
-        sed -i 's/^$local_destination\//' $disk_files_name
+        ls ${local_destination} | sort -R | head -n ${subset_size} > temp.txt
+        # add suffix
+        while read -r line; do
+            echo "${local_destination}/${line}" >> ${disk_files_name}
+        done < temp.txt
+        rm temp.txt
         local_condensing_destination=~/converted_metadata_pickles_testing
+
+        echo "completed getting file list from local disk"
     fi
 
 

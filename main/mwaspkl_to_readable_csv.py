@@ -36,13 +36,21 @@ def mwaspkl_to_readable_csv(bioproject, output_dir):
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
-        # get the mwaspkl file from s3
-        bioproject = sys.argv[1]
-        try:
-            subprocess.run('aws s3 cp ' + f'{S3_BUCKET}{bioproject}.mwaspkl .', shell=True)
-        except Exception as e:
-            print(f"Error getting the mwaspkl file: {e}")
-            sys.exit(1)
+        local_mode = False
+        if '-s' in sys.argv:
+            local_mode = True
+        sys.argv.remove('-s')
+
+        if not local_mode:
+            # get the mwaspkl file from s3
+            bioproject = sys.argv[1]
+            try:
+                subprocess.run('aws s3 cp ' + f'{S3_BUCKET}{bioproject}.mwaspkl .', shell=True)
+            except Exception as e:
+                print(f"Error getting the mwaspkl file: {e}")
+                sys.exit(1)
+        else:
+            bioproject = sys.argv[1]
         if len(sys.argv) < 3:
             output_dir = 'readable_condensed_bioproject_metadata_csvs'
         else:
@@ -50,7 +58,8 @@ if __name__ == '__main__':
 
         mwaspkl_to_readable_csv(sys.argv[1], output_dir)
 
-        os.remove(sys.argv[1] + '.mwaspkl')
+        if not local_mode:
+            os.remove(sys.argv[1] + '.mwaspkl')
         print(f"Converted {bioproject} to a readable csv file.")
     else:
         print("Please provide a file to read.")
