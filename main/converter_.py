@@ -14,7 +14,7 @@ BLACKLIST = {"PRJEB37886", "PRJNA514245", "PRJNA716984", "PRJNA731148", "PRJNA63
 def process_file(_metadata_file, source, _storage) -> tuple[int, int, float, str, int, int, int, set]:
     """processing file (load csv to df, convert to set-form (condensed for MWAS), """
     # set up
-    original_file = f"{source}/{_metadata_file}"
+    original_file = f"{source + '/' if source else ''}{_metadata_file}"
     new_file = f"{_storage}/{_metadata_file.split('/')[-1][:-4]}.mwaspkl"
     _size = os.path.getsize(f'{source}/{_metadata_file}')
     start_time = time.time()
@@ -73,6 +73,7 @@ if __name__ == '__main__':
             # get files to iterate over
             files = []
             if os.path.isdir(arg1):  # convert all csv files in the directory
+                source = arg1
                 files = os.listdir(arg1)
                 print("sorting files")
                 files.sort()
@@ -90,9 +91,12 @@ if __name__ == '__main__':
                             print(f"Could not find {start_at} in the list of files. Exiting...")
                             sys.exit(1)
             elif arg1.endswith('.txt'):
+                src = ''
                 with open(arg1, 'r') as f:
                     files = f.readlines()
+                    print(f"Found {len(files)} files to process.")
             elif arg1.endswith('.csv'):
+                src = ''
                 files = [arg1]
 
             # process files
@@ -107,7 +111,7 @@ if __name__ == '__main__':
                 print(f"Processing {bioproject}...")
                 if file.endswith('.csv'):
                     try:
-                        size, pickle_size, conversion_time, comment, num_biosamples, num_sets, num_permutation_sets, field_names = process_file(f"{file}", arg1, storage)
+                        size, pickle_size, conversion_time, comment, num_biosamples, num_sets, num_permutation_sets, field_names = process_file(f"{file}", src, storage)
                         results_f.write(f"{bioproject},{size},{pickle_size},{conversion_time},{comment},{num_biosamples},{num_sets},{num_permutation_sets}\n")
                         print(f"Processed {bioproject} in {conversion_time} seconds.")
                         fields.update(field_names)
