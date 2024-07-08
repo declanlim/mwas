@@ -80,7 +80,15 @@ PARALLELIZING = False
 
 BLACKLIST = {"PRJEB37886", "PRJNA514245", "PRJNA716984", "PRJNA731148", "PRJNA631508", "PRJNA665224", "PRJNA716985", "PRJNA479871", "PRJNA715749", "PRJEB11419",
              "PRJNA750736", "PRJNA525951", "PRJNA720050", "PRJNA731152", "PRJNA230403", "PRJNA675921", "PRJNA608064", "PRJNA486548",
-             "nan", "PRJEB43828", "PRJNA609094", "PRJNA686984", "PRJNA647773", "PRJNA995950"}  # list of bioprojects that are too large
+             "nan", "PRJEB43828", "PRJNA609094", "PRJNA686984", "PRJNA647773", "PRJNA995950"
+}  # list of bioprojects that are too large
+BLACKLISTED_METADATA_FIELDS = {
+    'publication_date', 'center_name', 'first_public', 'last_public', 'last_update', 'INSDC center name', 'INSDC first public',
+    'INSDC last public', 'INSDC last update', 'ENA center name', 'ENA first public', 'ENA last public', 'ENA last update',
+    'ENA-FIRST-PUBLIC', 'ENA-LAST-UPDATE', 'DDBJ center name', 'DDBJ first public', 'DDBJ last public', 'DDBJ last update',
+    'Contacts/Contact/Name/First', 'Contacts/Contact/Name/Middle', 'Contacts/Contact/Name/Last', 'Contacts/Contact/@email',
+    'Name/@url', 'collected_by', 'when'
+}
 
 # flags
 IMPLICIT_ZEROS = True  # TODO: implement this flag for when it's False
@@ -517,7 +525,9 @@ def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst:
         if mean_rpm_true == mean_rpm_false == 0:
             continue
 
-        if skip_tests:
+        # get list of all attributes sep by ; delim
+        fields = row['attributes'].split(';')
+        if skip_tests or all(field in BLACKLISTED_METADATA_FIELDS for field in fields):
             fold_change, test_statistic, p_value = '', '', ''
             true_biosamples, false_biosamples = '', ''
             status = 'skipped_statistical_testing'

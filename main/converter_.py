@@ -133,5 +133,6 @@ if __name__ == '__main__':
             # strip whitespace
             actual_fields = {field.strip() for field in actual_fields}
             with open('actual_fields.txt', 'w') as actual_fields_f:
-                actual_fields_f.write(str(actual_fields))
+                for field in actual_fields:
+                    actual_fields_f.write(f"{field}\n")
     print("Conversion complete.")

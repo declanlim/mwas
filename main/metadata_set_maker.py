@@ -1,13 +1,12 @@
 """turn a bioproject metadata file into a
 """
 import sys
-from typing import Any, Tuple
-
+from typing import Any
 import pandas as pd
 import time
 import os
 
-from pandas import DataFrame, Series
+from pandas import DataFrame
 
 
 # TODO: everything to lowercase, and remove commas
@@ -45,7 +44,7 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
     if not is_empty:
         for col in metadata_df.columns:
             num_uniques = metadata_df[col].nunique()
-            if col == 'biosample_id':
+            if col == 'biosample_id':  # or col in blacklisted_fields:
                 continue
             if num_uniques <= 1 or num_uniques == n:  # yes, it has been 0 strangely... (rare occurrence)
                 continue  # metadata_df.drop(col, axis=1, inplace=True)  # dropping takes too long
@@ -67,9 +66,9 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
                     # biosample_code is for key value in new_df_builder (remember, you can't use a list as a key in a dictionary)
 
                     if isinstance(col, str):
-                        col = col.replace(';', ':')
+                        col = col.replace(';', ':').lower()  # to avoid confusion with the delimiter
                     if isinstance(factor, str):
-                        factor = factor.replace(';', ':')  # to avoid confusion with the delimiter
+                        factor = factor.replace(';', ':').lower()  # to avoid confusion with the delimiter
 
                     try:
                         biosample_index_list = [i for i, x in enumerate(biosample_vector_series) if (x if include else not x)]

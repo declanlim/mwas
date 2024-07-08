@@ -1,0 +1,26 @@
+publication_date
+center_name
+first_public
+last_public
+last_update
+INSDC center name
+INSDC first public
+INSDC last public
+INSDC last update
+ENA center name
+ENA first public
+ENA last public
+ENA last update
+ENA-FIRST-PUBLIC
+ENA-LAST-UPDATE
+DDBJ center name
+DDBJ first public
+DDBJ last public
+DDBJ last update
+Contacts/Contact/Name/First
+Contacts/Contact/Name/Middle
+Contacts/Contact/Name/Last
+Contacts/Contact/@email
+Name/@url
+collected_by
+when
