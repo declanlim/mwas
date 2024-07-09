@@ -9,7 +9,6 @@ import os
 from pandas import DataFrame
 
 
-# TODO: everything to lowercase, and remove commas
 def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=False) -> tuple[Any, DataFrame, str, DataFrame | tuple | Any, bool]:
     """takes a metadata dataframe from a bioproject (accessed by biosample_id)
         and returns a list of biosample accessions and a dataframe where there are 3 columns:
@@ -32,7 +31,7 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
     else:
         if metadata_df['biosample_id'].dtype != 'object':
             metadata_df['biosample_id'] = metadata_df['biosample_id'].astype(str)
-        metadata_df = metadata_df[metadata_df['biosample_id'].str.startswith('SAM')]
+        metadata_df = metadata_df[metadata_df['biosample_id'].str.startswith('SAM') & ~metadata_df['biosample_id'].isna()]
         if metadata_df.shape[0] == 0:
             comment += "No valid biosample_ids found in the metadata dataframe. "
             print(comment)
@@ -65,11 +64,6 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
                     # note, use biosample_index_list in the final new_df, since biosample_vector can be too large an integer for pandas
                     # biosample_code is for key value in new_df_builder (remember, you can't use a list as a key in a dictionary)
 
-                    if isinstance(col, str):
-                        col = col.replace(';', ':').lower()  # to avoid confusion with the delimiter
-                    if isinstance(factor, str):
-                        factor = factor.replace(';', ':').lower()  # to avoid confusion with the delimiter
-
                     try:
                         biosample_index_list = [i for i, x in enumerate(biosample_vector_series) if (x if include else not x)]
                     except OverflowError:
@@ -87,11 +81,15 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
                         biosample_code = str(biosample_vector_series.tolist())
 
                     # incorporate our set into the new_df_builder
+                    def format_string(string: str) -> str:
+                        """format the strings for the metadata file conventions (; are reserved for separators)"""
+                        return string.replace(';', ':').lower() if isinstance(string, str) else string
+                    field, value = format_string(col), format_string(factor)
                     if biosample_code in new_df_builder:
                         curr_attr_val_pair = new_df_builder[biosample_code][0]
-                        new_df_builder[biosample_code][0] = (f'{curr_attr_val_pair[0]}; {col}', f'{curr_attr_val_pair[1]}; {factor}')
+                        new_df_builder[biosample_code][0] = (f'{curr_attr_val_pair[0]}; {field}', f'{curr_attr_val_pair[1]}; {value}')
                     else:
-                        new_df_builder[biosample_code] = [(col, factor), (biosample_index_list, include)]  # if mostly_true, we want to mark this index list as an exlude list
+                        new_df_builder[biosample_code] = [(field, value), (biosample_index_list, include)]  # if mostly_true, we want to mark this index list as an exlude list
 
     new_df_data = []
     biosamples_ref_lst = metadata_df['biosample_id'].tolist()

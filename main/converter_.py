@@ -73,7 +73,7 @@ if __name__ == '__main__':
             # get files to iterate over
             files = []
             if os.path.isdir(arg1):  # convert all csv files in the directory
-                source = arg1
+                src = arg1
                 files = os.listdir(arg1)
                 print("sorting files")
                 files.sort()

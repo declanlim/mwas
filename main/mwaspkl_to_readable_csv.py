@@ -39,7 +39,7 @@ if __name__ == '__main__':
         local_mode = False
         if '-s' in sys.argv:
             local_mode = True
-        sys.argv.remove('-s')
+            sys.argv.remove('-s')
 
         if not local_mode:
             # get the mwaspkl file from s3
