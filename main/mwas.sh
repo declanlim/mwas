@@ -84,6 +84,10 @@ MODE:
                             is the code provided from running MWAS.
                             [OPTIONS] specifies what to download. If no options
                             are provided, it will default to the --output option.
+  -rg, --run-get [INPUT_FILE] [MWAS_FLAGS]...
+                            run MWAS with the specified input file, displays progress
+                            report, and downloads the results afterwards.
+                            Provides a session code relative to your input.
   -ca, --clean-all          Remove all downloaded files and directories
 
 OPTIONS: (used with -g, --get)

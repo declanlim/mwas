@@ -81,8 +81,9 @@ def main(file: str):
         raw_md_file_size = line[1]
         condensed_md_file_size = line[2]
         comment_code = encode(line[4])
-        results += f'{bioproject},{n_biosamples},{n_sets},{n_permutation_sets},{raw_md_file_size},{condensed_md_file_size},{comment_code}\n'
-        print(results)
+        result = f'{bioproject},{n_biosamples},{n_sets},{n_permutation_sets},{raw_md_file_size},{condensed_md_file_size},{comment_code}\n'
+        print(result)
+        results += result
     with open('../data/metadata_files_info_table.csv', 'w') as f:
         f.write(results)
 
