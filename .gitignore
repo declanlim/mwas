@@ -16,4 +16,8 @@ main/blacklist.txt
 main/csvs/
 main/readable_condensed_bioproject_metadata_csvs/
 wip_files/
-main/other_data_files/
+main/other_data/
+main/mwas_results_folder_*
+main/bioprojects_ignored.txt
+main/mwas_logging.txt
+main/request.json

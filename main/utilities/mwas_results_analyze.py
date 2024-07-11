@@ -68,7 +68,7 @@ if __name__ == '__main__':
                        f'{max_memory_usage},{avg_memory_usage},{avg_memory_usage_permutations},{total_memory_usage},' \
                        f'{max_runtime},{avg_runtime},{avg_runtime_permutations},{total_runtime}\n'
     try:
-        with open('other_data_files/mwas_results_summary.csv', 'w') as f:
+        with open('../other_data/mwas_results_summary.csv', 'w') as f:
             f.write(results)
     except IOError:
         print("Error writing to file, check to make sure it isn't open in another program.")

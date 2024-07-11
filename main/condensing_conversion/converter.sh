@@ -94,14 +94,14 @@ if [[ "$1" == "-s" || "$1" == "-st" ]]; then
 elif [ "$1" == "-f" ]; then
     S3_CONDENSED_METADATA_DIR=s3://serratus-biosamples/condensed-bioproject-metadata/
 
-    s5cmd sync ${S3_RAW_METADATA_DIR}/ ${local_destination}
+    s5cmd sync ${S3_RAW_METADATA_DIR} ${local_destination}
     echo "completed copying raw csv files from s3 to local disk"
 
     # time python3 converter_.py ${local_destination} ~/converted_metadata_pickles > log.txt
-    time parallel -j 4 python3 converter_.py ::: ${local_destination} ::: $local_condensing_destination > log.txt
+    time python3 converter_.py ${local_destination} ${local_condensing_destination} > log.txt
     echo "completed converting csv files to pickle files of condensed metadata"
 
-    s5cmd sync $local_local_condensing_destination ${S3_CONDENSED_METADATA_DIR}
+    s5cmd sync ${local_condensing_destination}/ ${S3_CONDENSED_METADATA_DIR}
     echo "completed syncing pickle files to s3"
 else
     echo "Please specify either -s for subset or -f for full"

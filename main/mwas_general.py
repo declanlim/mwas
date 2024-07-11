@@ -476,8 +476,13 @@ def mean_diff_statistic(x, y, axis):
     return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 
-def process_group(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst: np.array,
-                  group_name: str, bioproject_name: str, skip_tests: bool) -> str:
+def process_group_lambda():
+    """aws lambda function to process a group"""
+    pass
+
+
+def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst: np.array,
+                         group_name: str, bioproject_name: str, skip_tests: bool) -> str:
     """Process the given group, and return an output file
     """
     # num_metasets = metadata_df.shape[0]
@@ -683,7 +688,8 @@ def process_bioproject(bioproject: BioProjectInfo, main_df: pd.DataFrame) -> str
         if skip:
             log_print(f"Not doing tests for {group} because it has too few nonzeros")
         # run tests on this group
-        output_constructor += process_group(bioproject.metadata_df, bioproject.metadata_ref_lst, rpm_list, group, bioproject.name, skip)
+        output_constructor += process_group_normal(
+            bioproject.metadata_df, bioproject.metadata_ref_lst, rpm_list, group, bioproject.name, skip)
         extra_info = f'Mem space for output for this bioproject so far: {sys.getsizeof(output_constructor)}' if PERFOMANCE_STATS else ''
         log_print(f"Finished processing {group} for {bioproject.name}.{extra_info}\n")
     bioproject.delete_metadata()

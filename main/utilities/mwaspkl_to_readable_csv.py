@@ -52,7 +52,7 @@ if __name__ == '__main__':
         else:
             bioproject = sys.argv[1]
         if len(sys.argv) < 3:
-            output_dir = 'readable_condensed_bioproject_metadata_csvs'
+            output_dir = '../readable_condensed_bioproject_metadata_csvs'
         else:
             output_dir = sys.argv[2]
 

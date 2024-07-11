@@ -9,7 +9,7 @@ import sys
 # import pdb
 # pdb.set_trace()
 
-from main.metadata_set_maker import metadata_to_set_accession
+from main.condensing_conversion.metadata_set_maker import metadata_to_set_accession
 
 METADATA_FILES = ['TEST--PRJEB37099.csv', 'TEST_LARGE--PRJDB11622.csv', 'TEST_MEDIUM--PRJDB10214.csv', 'TEST_SMALL--PRJDA67149.csv']
 TEST_ALL_COLUMNS = True

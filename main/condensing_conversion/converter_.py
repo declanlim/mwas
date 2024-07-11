@@ -29,7 +29,7 @@ def process_file(_metadata_file, source, _storage) -> tuple[int, int, float, str
     try:
         metadata_dataframe = pd.read_csv(original_file, low_memory=False)
     except Exception as e:
-        return os.path.getsize(original_file), 0, time.time() - start_time, f"FAILED - csv reading: {e}", 0, 0, 0, set()
+        return os.path.getsize(original_file), 0, time.time() - start_time, f"FAILED - csv reading: {e}".replace(',', '').replace('\n', ''), 0, 0, 0, set()
 
     # check if metadata_dataframe is empty
     if metadata_dataframe.shape[0] < 4:  # because it's impossible to do a meaningful test with less than 4 entities
@@ -67,8 +67,9 @@ if __name__ == '__main__':
         storage = sys.argv[2]
         print(f"{arg1}")
         write_mode = 'a' if '--start_at' in sys.argv else 'w'
-        with open('conversion_results.csv', write_mode) as results_f, open('conversion_errors.txt', 'w') as errors_f:
-            results_f.write('file,original_size,condensed_pickle_size,processing_time,comment,num_biosamples,num_sets,num_permutation_sets\n')
+        with open('../data/conversion_results.csv', write_mode) as results_f, open('../data/conversion_errors.txt', 'w') as errors_f:
+            results_f.write('file,original_size,condensed_pickle_size,processing_time,comment,num_biosamples,num_sets,'
+                            'num_permutation_sets\n')
 
             # get files to iterate over
             files = []
@@ -119,7 +120,7 @@ if __name__ == '__main__':
                         fields.update(field_names)
                     except Exception as e:
                         print(f"Failed to process {bioproject} due to error: {e}")
-                        results_f.write(f"{bioproject},{os.path.getsize(f'{arg1}/{file}')},0,0,FAILED - misc error: {e}\n,0,0,0\n")
+                        results_f.write(f"{bioproject},{os.path.getsize(f'{arg1}/{file}')},0,0,FAILED - misc error: {e},0,0,0\n")
                         errors_f.write(f"{bioproject},{e}\n")
 
             # record fields to file in form {field1, field2, field3}
@@ -132,7 +133,7 @@ if __name__ == '__main__':
                 actual_fields.update(str(field).split(';'))
             # strip whitespace
             actual_fields = {field.strip() for field in actual_fields}
-            with open('actual_fields.txt', 'w') as actual_fields_f:
+            with open('../data/actual_fields.txt', 'w') as actual_fields_f:
                 for field in actual_fields:
                     actual_fields_f.write(f"{field}\n")
     print("Conversion complete.")
