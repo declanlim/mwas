@@ -1,5 +1,5 @@
-logs/
 queries/
+logs/
 wip_files/
 main/outputs
 main/pickles
@@ -21,3 +21,4 @@ main/mwas_results_folder_*
 main/bioprojects_ignored.txt
 main/mwas_logging.txt
 main/request.json
+lambda_stuff/

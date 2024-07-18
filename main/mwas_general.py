@@ -19,7 +19,7 @@ from typing import Any
 import psycopg2
 import pandas as pd
 import numpy as np
-import scipy.stats as stats
+from scipy.stats import permutation_test, ttest_ind_from_stats
 
 # sql constants
 SERRATUS_CONNECTION_INFO = {
@@ -476,11 +476,6 @@ def mean_diff_statistic(x, y, axis):
     return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 
-def process_group_lambda():
-    """aws lambda function to process a group"""
-    pass
-
-
 def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst: np.array,
                          group_name: str, bioproject_name: str, skip_tests: bool) -> str:
     """Process the given group, and return an output file
@@ -551,14 +546,14 @@ def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_r
                     if min(num_false, num_true) < 4 or ONLY_T_TEST:
                         # scipy t test
                         status = 't_test'
-                        test_statistic, p_value = stats.ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
+                        test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
                                                                              mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
                                                                              equal_var=False)
                     else:
                         # run a permutation test
                         status = 'permutation_test'
                         num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
-                        res = stats.permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
+                        res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
                                                      vectorized=True)
                         p_value, test_statistic = res.pvalue, res.statistic
                 except Exception as e:
