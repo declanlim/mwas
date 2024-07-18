@@ -17,19 +17,18 @@ def run():
         # Receive CSV data and flags from the request
         flags = request.json.get('flags')
         destination = request.json.get('dest')
-        length = len(request.data)
-        logging.info("Received request with data: %s ... (and %s more chars)", request.data[:20], length - 20)
+        try:
+            json_data = request.json.get('data')
+        except Exception as e:
+            logging.error("Error decoding data: %s", e)
+            return jsonify({"error": str(e)}), 500
+        length = len(json_data)
+        logging.info("Received request with data: %s ... (and %s more chars)", json_data[:20], length - 20)
         logging.info("Received flags: %s", flags)
         logging.info("s3_bucket: %s", destination)
 
         # Create a temporary file to store the CSV data
         with open('temp_input_from_request.csv', mode='w') as temp_csv_file:
-            try:
-                json_data = request.json.get('data')
-            except Exception as e:
-                logging.error("Error decoding data: %s", e)
-                return jsonify({"error": str(e)}), 500
-
             writer = csv.writer(temp_csv_file)
             writer.writerow(json_data[0].keys())
 

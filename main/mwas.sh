@@ -300,7 +300,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     CSV_FILE=$2
     csvjson $CSV_FILE | jq . > request.json
     # create JSON object with data and flags
-    JSON_DATA=$(jq -n --arg flags "$FLAGS" --argjson data "$(cat request.json)" '{data: $data, flags: $flags}')
+    JSON_DATA=$(jq -n --arg flags "$FLAGS" --arg data "$(cat request.json)" '{data: $data, flags: $flags}')
     rm request.json
 
     # hash the JSON_DATA to check if the request has already been made and predetermine the response's location

@@ -87,7 +87,7 @@ BLACKLISTED_METADATA_FIELDS = {
     'INSDC last public', 'INSDC last update', 'ENA center name', 'ENA first public', 'ENA last public', 'ENA last update',
     'ENA-FIRST-PUBLIC', 'ENA-LAST-UPDATE', 'DDBJ center name', 'DDBJ first public', 'DDBJ last public', 'DDBJ last update',
     'Contacts/Contact/Name/First', 'Contacts/Contact/Name/Middle', 'Contacts/Contact/Name/Last', 'Contacts/Contact/@email',
-    'Name/@url', 'collected_by', 'when'
+    'Name/@url', 'name/@url', 'collected_by', 'when', 'submission_date'
 }
 
 # flags
@@ -113,6 +113,9 @@ progress = 0
 logging_level = 2  # 0: no logging, 1: minimal logging, 2: verbose logging
 use_logger = False
 logging.basicConfig(level=logging.INFO)
+# refresh the log file
+with open("mwas_logging.txt", 'w') as f:
+    pass
 logger = logging.getLogger("mwas_logging.txt")
 if logger.hasHandlers():
     logger.handlers.clear()
@@ -526,7 +529,7 @@ def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_r
             continue
 
         # get list of all attributes sep by ; delim
-        fields = row['attributes'].split(';')
+        fields = row['attributes'].split('; ')
         if skip_tests or all(field in BLACKLISTED_METADATA_FIELDS for field in fields):
             fold_change, test_statistic, p_value = '', '', ''
             true_biosamples, false_biosamples = '', ''
