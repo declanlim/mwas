@@ -81,7 +81,12 @@ PARALLELIZING = False
 BLACKLIST = {"PRJEB37886", "PRJNA514245", "PRJNA716984", "PRJNA731148", "PRJNA631508", "PRJNA665224", "PRJNA716985", "PRJNA479871", "PRJNA715749", "PRJEB11419",
              "PRJNA750736", "PRJNA525951", "PRJNA720050", "PRJNA731152", "PRJNA230403", "PRJNA675921", "PRJNA608064", "PRJNA486548",
              "nan", "PRJEB43828", "PRJNA609094", "PRJNA686984", "PRJNA647773", "PRJNA995950"
-}  # list of bioprojects that are too large
+             }  # list of bioprojects that are too large
+BLACKLIST_2 = {"PRJNA614995", "PRJNA704697", "PRJNA738870", "PRJNA731149", "PRJNA248792", "PRJNA218110", "PRJEB40277", "PRJNA808151", "PRJDB17001", "PRJNA612578",
+               "PRJNA767338", "PRJDB11811", "PRJEB2136", "PRJNA793773", "PRJNA983279", "PRJNA630714", "PRJNA242847", "PRJEB47340", "PRJEB2141", "PRJEB14362", "PRJNA738869",
+               "PRJEB3084", "PRJNA743046", "PRJNA689853", "PRJNA186035", "PRJNA315192"
+               }
+BLACKLIST = BLACKLIST.union(BLACKLIST_2)
 BLACKLISTED_METADATA_FIELDS = {
     'publication_date', 'center_name', 'first_public', 'last_public', 'last_update', 'INSDC center name', 'INSDC first public',
     'INSDC last public', 'INSDC last update', 'ENA center name', 'ENA first public', 'ENA last public', 'ENA last update',
@@ -185,8 +190,10 @@ class Progress:
 
     def update_time(self) -> None:
         """Update the small progress stats"""
+
         def seconds_to_minutes(seconds: float) -> float:
             return round(seconds / 60, 2)
+
         self.elapsed_time = seconds_to_minutes(time.time() - self.start_time)
         self.remaining_time = seconds_to_minutes(self.init_est_time - self.elapsed_time) if self.init_est_time > 0 else 0
 
@@ -536,7 +543,7 @@ def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_r
             status = 'skipped_statistical_testing'
         else:
             test_key = (num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false)
-            if test_key in reusable_results:
+            if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
                 fold_change, test_statistic, p_value, status = reusable_results[test_key]
                 log_print(f"Reusing results for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}", 2)
             else:
@@ -550,14 +557,14 @@ def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_r
                         # scipy t test
                         status = 't_test'
                         test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
-                                                                             mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
-                                                                             equal_var=False)
+                                                                       mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
+                                                                       equal_var=False)
                     else:
                         # run a permutation test
                         status = 'permutation_test'
                         num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
                         res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
-                                                     vectorized=True)
+                                               vectorized=True)
                         p_value, test_statistic = res.pvalue, res.statistic
                 except Exception as e:
                     log_print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}', 2)
