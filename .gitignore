@@ -23,3 +23,5 @@ main/mwas_logging.txt
 main/request.json
 lambda_stuff/
 main/tests/other_tests/__pycache__/
+main/condensing_conversion/__pycache__/
+main/tests/metadata_set_maker_tests/test_files/

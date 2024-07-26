@@ -59,7 +59,7 @@ def main(file: str):
 
     with open(file, 'r') as f:
         lines = f.readlines()
-    results = 'bioproject, n_biosamples, n_sets, n_permutation_sets, raw_md_file_size, condensed_md_file_size, comment_code\n'
+    results = 'bioproject, n_biosamples, n_sets, n_permutation_sets, n_skippable_permutation_sets, raw_md_file_size, condensed_md_file_size, comment_code\n'
     skip = -1
     for i, line in enumerate(lines[1:]):
         if i == skip:
@@ -73,15 +73,16 @@ def main(file: str):
         bioproject = line[0]
 
         if skip == i + 1:
-            n_biosamples = n_sets = n_permutation_sets = 0
+            n_biosamples = n_sets = n_permutation_sets = n_skippable_permutation_sets = 0
         else:
             n_biosamples = line[5]
             n_sets = line[6]
             n_permutation_sets = line[7]
+            n_skippable_permutation_sets = line[8]
         raw_md_file_size = line[1]
         condensed_md_file_size = line[2]
         comment_code = encode(line[4])
-        result = f'{bioproject},{n_biosamples},{n_sets},{n_permutation_sets},{raw_md_file_size},{condensed_md_file_size},{comment_code}\n'
+        result = f'{bioproject},{n_biosamples},{n_sets},{n_permutation_sets},{n_skippable_permutation_sets},{raw_md_file_size},{condensed_md_file_size},{comment_code}\n'
         print(result)
         results += result
     with open('../data/metadata_files_info_table.csv', 'w') as f:

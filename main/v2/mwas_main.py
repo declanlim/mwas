@@ -125,7 +125,7 @@ P_VALUE_THRESHOLD = 0.005
 ONLY_T_TEST = False  # if True, then only t tests will be run, and other tests, e.g. permutation tests, will not be done
 COMBINE_OUTPUTS = True  # if false, there will ba a separate output file for each bioproject
 PERFOMANCE_STATS = False
-INCLUDE_SKIPPED_STATS = True  # if True, then the output will include the stats of the skipped tests
+INCLUDE_SKIPPED_STATS = False  # if True, then the output will include the stats of the skipped tests
 PRE_CALC_RPM_MAP = False  # if True, then the rpm map will be precalculated for each bioproject
 
 # constants
@@ -138,7 +138,7 @@ OUT_COLS_STR = """bioproject,%s,metadata_field,metadata_value,status,%snum_true,
 
 # debugging
 # num_tests = 0
-progress = 0
+# progress = 0
 logging_level = 2  # 0: no logging, 1: minimal logging, 2: verbose logging
 use_logger = False
 logging.basicConfig(level=logging.INFO)
@@ -260,13 +260,14 @@ PROGRESS = Progress()
 class BioProjectInfo:
     """Class to store information about a bioproject"""
 
-    def __init__(self, name: str, s3_metadata_file_path: str, metadata_file_size: int, n_biosamples: int,
-                 n_sets: int, n_permutation_sets: int, n_groups: int, n_skipped_groups: int) -> None:
+    def __init__(self, name: str, metadata_file_size: int, n_biosamples: int,
+                 n_sets: int, n_permutation_sets: int, n_skippable_permutation_sets: int, n_groups: int, n_skipped_groups: int) -> None:
         self.name = name
-        self.md_s3_file_path = s3_metadata_file_path
         self.md_file_size = metadata_file_size
         self.n_sets = n_sets
         self.n_permutation_sets = n_permutation_sets
+        self.n_skippable_permutation_sets = n_skippable_permutation_sets
+        self.n_actual_permutation_sets = n_permutation_sets - n_skippable_permutation_sets if not INCLUDE_SKIPPED_STATS else n_permutation_sets
         self.n_biosamples = n_biosamples
         self.n_groups = n_groups
         self.n_skipped_groups = n_skipped_groups
@@ -301,7 +302,7 @@ class BioProjectInfo:
         # print(f"Estimated worst-case time if ran tests in series: {est_series_time} seconds")
 
         time_per_test = self.n_biosamples * 0.0003
-        total_tests = (self.n_groups - self.n_skipped_groups) * self.n_permutation_sets
+        total_tests = (self.n_groups - self.n_skipped_groups) * self.n_actual_permutation_sets
         lambda_area = (math.floor(time_constraint / time_per_test) * n_conc_procs)
         self.num_lambda_jobs = math.ceil(total_tests / lambda_area)
 
@@ -320,7 +321,7 @@ class BioProjectInfo:
                 tests_added_to_lambda += 1  # add a test
                 left_off_at += 1  # record where we are
                 num_tests_added += 1  # update where we are in a group relative to the total tests
-                if num_tests_added % self.n_permutation_sets == 0:  # finished adding tests for a group
+                if num_tests_added % self.n_actual_permutation_sets == 0:  # finished adding tests for a group
                     focus_groups[self.groups[curr_group]] = (started_at, left_off_at)
                     curr_group += 1
                     started_at = left_off_at = 0
@@ -330,26 +331,24 @@ class BioProjectInfo:
 
         print(self.jobs)  # jobs are of the form: {'group1': (start, end), 'group2': (start, end), ...}
         assert self.num_lambda_jobs == len(self.jobs)
-        return self.n_sets, self.num_lambda_jobs
+        return self.n_actual_permutation_sets, self.num_lambda_jobs
 
-    def dispatch_all_lambda_jobs(self, main_df: pd.DataFrame, lam_client: boto3.client) -> None:
+    def dispatch_all_lambda_jobs(self, input_df: pd.DataFrame, lam_client: boto3.client) -> None:
         """lam_client: lambda_client = boto3.client('lambda')
 
         note lambda handler will call self.process_bioproject(...)
         """
-        # get subset of main_df that belongs to this bioproject
-        subset_df = main_df[main_df['bio_project'] == self.name]
-
         bioproject_info = self.__dict__
-        input_df = subset_df.to_dict(orient='records')
+        input_dict = input_df.to_dict(orient='records')
 
+        print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
         # non permutation test lambda(TODO: lambda[s]?)
         lam_client.invoke(
             FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
             InvocationType='Event',  # Asynchronous invocation
             Payload=json.dumps({
                 'bioproject_info': bioproject_info,
-                'input_df': input_df,
+                'input_df': input_dict,
                 'job_window': {},  # empty implies all groups
                 'id': 0  # 0 implies this is the non-perm tests lambda
             })
@@ -362,7 +361,7 @@ class BioProjectInfo:
                 InvocationType='Event',  # Asynchronous invocation
                 Payload=json.dumps({
                     'bioproject_info': bioproject_info,
-                    'input_df': input_df,
+                    'input_df': input_dict,
                     'job_window': job,
                     'id': i + 1
                 })
@@ -373,13 +372,13 @@ class BioProjectInfo:
         Note: we should only use this if we're currently working with the bioproject
         """
         try:
-            command_cp = f"s5cmd cp -f {S3_METADATA_DIR}/{self.md_s3_file_path} temp_file.pickle"
+            command_cp = f"s5cmd cp -f {S3_METADATA_DIR}/{self.name}.mwaspkl temp_file.pickle"
             subprocess.run(SHELL_PREFIX + command_cp, shell=True)
             with open('temp_file.pickle', 'rb') as f:
                 self.metadata_ref_lst = pickle.load(f)
                 self.metadata_df = pickle.load(f)
                 if len(self.metadata_ref_lst) != len(self.metadata_df):
-                    print("Error: metadata ref list and metadata df are not the same length. Requires updating mwas metadata table")
+                    print("Warning: metadata ref list and metadata df are not the same length. Requires updating mwas metadata table")
                 self.n_biosamples = len(self.metadata_ref_lst)
             os.remove('temp_file.pickle')
         except Exception as e:
@@ -485,7 +484,145 @@ class BioProjectInfo:
         return result
 
     def process_bioproject_other(self) -> str | None:
-        return ''
+        """Process the given group, and return an output file
+            """
+        result = ''
+        skip_tests = False
+        reusable_results = {}  # save results while a group is processed, so we can avoid recomputing them
+        for group in self.groups:
+            if self.rpm_map[group][1]:  # if the group should be skipped
+                if INCLUDE_SKIPPED_STATS:
+                    skip_tests = True
+                else:
+                    continue
+            for _, row in self.metadata_df.iterrows():
+                test_start_time = time.time()
+
+                index_is_inlcude = row['include?']
+                index_list = row['biosample_index_list']
+
+                # could be optimized?
+                true_rpm, false_rpm = [], []
+                for i, rpm_val in enumerate(self.rpm_map):
+                    if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
+                        continue
+                    if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
+                        true_rpm.append(rpm_val)
+                    else:
+                        false_rpm.append(rpm_val)
+
+                num_true, num_false = len(true_rpm), len(false_rpm)
+
+                if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
+                    log_print(f'skipping {group} - {row["attributes"]}:{row["values"]} '
+                              f'because num_true or num_false < 2', 2)
+                    continue
+
+                # calculate desecriptive stats
+                # NON CORRECTED VALUES
+                mean_rpm_true = np.nanmean(true_rpm)
+                mean_rpm_false = np.nanmean(false_rpm)
+                sd_rpm_true = np.nanstd(true_rpm)
+                sd_rpm_false = np.nanstd(false_rpm)
+
+                # skip if both conditions have 0 reads (this should never happen, but just in case)
+                if mean_rpm_true == mean_rpm_false == 0:
+                    continue
+
+                # get list of all attributes sep by ; delim
+                fields = row['attributes'].split('; ')
+                if skip_tests or all(field in BLACKLISTED_METADATA_FIELDS for field in fields):
+                    if INCLUDE_SKIPPED_STATS:
+                        continue
+                    fold_change, test_statistic, p_value = '', '', ''
+                    true_biosamples, false_biosamples = '', ''
+                    status = 'skipped_statistical_testing'
+                else:
+                    test_key = (num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false)
+                    if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
+                        fold_change, test_statistic, p_value, status = reusable_results[test_key]
+                        log_print(
+                            f"Reusing results for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}",2)
+                    else:
+                        # calculate fold change and check if any values are nan
+                        fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
+
+                        # if there are at least 4 values in each group, run a permutation test, otherwise run a t test
+                        try:
+                            log_print(
+                                f"Running statistical test for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
+                            if min(num_false, num_true) < 4 or ONLY_T_TEST:
+                                # scipy t test
+                                status = 't_test'
+                                test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
+                                                                               mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
+                                                                               equal_var=False)
+                            else:
+                                # run a permutation test
+                                status = 'permutation_test'
+                                num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
+                                res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
+                                                       vectorized=True)
+                                p_value, test_statistic = res.pvalue, res.statistic
+                        except Exception as e:
+                            log_print(f'Error running statistical test for {group} - {row["attributes"]}:{row["values"]} - {e}', 2)
+                            continue
+
+                        reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
+
+                    if p_value < P_VALUE_THRESHOLD:
+                        status += '; significant'
+                        too_many, threshold = 'too many biosamples to list', 200
+                        true_biosamples = '; '.join([self.metadata_ref_lst[i] for i in index_list]) \
+                            if (num_true < threshold and index_is_inlcude) or (num_false < threshold and not index_is_inlcude) else too_many
+                        false_biosamples = '; '.join([self.metadata_ref_lst[i] for i in range(len(self.metadata_ref_lst)) if i not in index_list]) \
+                            if (num_true < threshold and not index_is_inlcude) or (num_false < threshold and index_is_inlcude) else too_many
+                        if not index_is_inlcude:
+                            true_biosamples, false_biosamples = false_biosamples, true_biosamples
+                    else:
+                        true_biosamples, false_biosamples = '', ''
+                    log_print(f"Finished with p-value: {p_value}", 2)
+
+                if PERFOMANCE_STATS:
+                    _, peak_memory = tracemalloc.get_traced_memory()
+                    tracemalloc.stop()
+                    extra_info = f'{time.time() - test_start_time}, {peak_memory},'
+                else:
+                    extra_info = ''
+
+                # record the output
+                this_result = (
+                    f"{self.name},{group},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
+                    f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
+
+                log_print(this_result, 2)
+                shared_dict[row['test_id']] = this_result
+            return result
+
+    def process_set_ttest(self, shared_dict: dict, row: dict) -> None:
+        """Process a single set of t tests
+        """
+        test_start_time = time.time()
+
+        index_is_inlcude, index_list = row['include'], row['biosample_index_list']
+        group_name, group_rpm_lst = row['group'], row['group_rpm_list']
+
+        # could be optimized?
+        true_rpm, false_rpm = [], []
+        for i, rpm_val in enumerate(group_rpm_lst):
+            if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
+                continue
+            if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
+                true_rpm.append(rpm_val)
+            else:
+                false_rpm.append(rpm_val)
+
+        num_true, num_false = len(true_rpm), len(false_rpm)
+
+        if num_true < 2 or num_false < 2:
+            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} '
+                      f'because num_true or num_false < 2', 2)
+            return
 
     def process_bioproject_perms(self, job_groups, num_tests) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
@@ -496,10 +633,7 @@ class BioProjectInfo:
             start, end = job_groups[group]
             # get subset of metadata_df that are permutation tests and aren't blacklisted fields
             self.metadata_df = self.metadata_df[self.metadata_df['test_type'] == 'permutation-test']
-            def field_is_blacklisted(df) -> bool:
-                fields = df['attributes'].split('; ')
-                return all(field in BLACKLISTED_METADATA_FIELDS for field in fields)
-            self.metadata_df = self.metadata_df[~self.metadata_df.apply(field_is_blacklisted, axis=1)]
+            self.metadata_df = self.metadata_df[self.metadata_df['skipppable?'] == 0]
             sets_subset_df = self.metadata_df.iloc[start:end]
 
             # add the tests to the tests list
@@ -525,20 +659,13 @@ class BioProjectInfo:
         log_print(f"Finished processing tests for {self.name}\n")
         return results
 
-
-    def process_set_perm(self, shared_dict: dict, test_info: dict) -> None:
+    def process_set_perm(self, shared_dict: dict, row: dict) -> None:
         """Process a single set of permutation tests
         """
         test_start_time = time.time()
-        index_is_inlcude = test_info['include']
-        index_list = test_info['biosample_index_list']
-        group_rpm_lst = test_info['group_rpm_list']
-        group_name = test_info['group']
-        row = test_info
 
-        # deprecated
-        # num_true = len(index_list) if index_is_inlcude else num_biosamples - len(index_list)
-        # num_false = len(biosample_ref) - num_true
+        index_is_inlcude, index_list = row['include'], row['biosample_index_list']
+        group_name, group_rpm_lst = row['group'], row['group_rpm_list']
 
         # could be optimized?
         true_rpm, false_rpm = [], []
@@ -553,7 +680,8 @@ class BioProjectInfo:
         num_true, num_false = len(true_rpm), len(false_rpm)
 
         if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
-            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2', 2)
+            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} '
+                      f'because num_true or num_false < 2', 2)
             return
 
         # calculate desecriptive stats
@@ -606,7 +734,8 @@ class BioProjectInfo:
         # record the output
         this_result = (
             f"{self.name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
-            f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
+            f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n"
+        )
         log_print(this_result, 2)
         shared_dict[row['test_id']] = this_result
 
@@ -632,169 +761,6 @@ def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd
             return None
 
 
-# TODO: remove
-class MountTmpfs:
-    """A mounted tmpfs filesystem referencer
-    """
-
-    def __init__(self, mount_point: str = DEFAULT_MOUNT_POINT, alloc_space: int = None) -> None:
-        self.mount_point = mount_point
-        self.alloc_space = alloc_space  # if None, then it's a dynamic mount
-        self.space_used = 0  # bytes of actual space currently in use
-        self.is_mounted = False
-
-    def is_tmpfs_mounted(self) -> bool:
-        """Checks if the given mount point is mounted as tmpfs or exists as a logical disk in Windows."""
-        if OS == 'Windows':
-            return False  # Windows does not support tmpfs mounting
-        else:
-            return self.is_tmpfs_mounted_unix()
-
-    def is_tmpfs_mounted_unix(self) -> bool:
-        """Check if the given mount point is mounted as tmpfs in Unix."""
-        try:
-            mounts = subprocess.check_output('mount', shell=True).decode().split('\n')
-            for mount in mounts:
-                parts = mount.split()
-                if len(parts) > 4 and parts[2] == self.mount_point and parts[4] == 'tmpfs':
-                    return True
-            return False
-        except subprocess.CalledProcessError as e:
-            log_print(f"Failed to check mounted drives in Unix: {e}")
-            return False
-
-    def mount(self) -> None:
-        """Mounts the tmpfs filesystem"""
-        if OS == 'Windows':
-            if not os.path.exists(PICKLE_DIR):
-                os.mkdir(PICKLE_DIR)
-            self.mount_point = None
-            log_print("Windows does not support tmpfs mounting. Resorting to using working dir folder without mount...")
-            return
-        if not self.is_tmpfs_mounted():
-            log_print(f"{self.mount_point} was not mounted as tmpfs (RAM), so mounting it now.")
-            if OS == 'Windows':
-                # Windows-specific mounting
-                pass
-            else:
-                # Unix-specific mounting
-                alloc_space = f"-o size={self.alloc_space}" if self.alloc_space else ""
-                subprocess.run(
-                    f"sudo mount {alloc_space} -t tmpfs {self.mount_point.split()[-1]} {self.mount_point}",
-                    shell=True
-                )
-            self.is_mounted = True
-        else:
-            log_print(f"{self.mount_point} is already mounted as type tmpfs")
-
-        self.is_mounted = True
-
-    def unmount(self) -> None:
-        """Unmounts the tmpfs filesystem"""
-        if self.is_tmpfs_mounted():
-            if OS == 'Windows':
-                # Windows-specific file setup
-                os.rmdir(PICKLE_DIR)
-                pass
-            else:
-                # Unix-specific unmounting
-                subprocess.run(f"sudo umount -f {self.mount_point}", shell=True)
-                self.is_mounted = False
-                log_print(f"{self.mount_point} was unmounted")
-        else:
-            log_print(f"{self.mount_point} is not mounted as tmpfs")
-
-
-# TODO: remove
-def metadata_retrieval(biopj_block: list[str], storage: MountTmpfs) -> tuple[dict[str, BioProjectInfo], int]:
-    """Retrieve metadata for the given bioprojects, and organize them in a dictionary
-    storage will usually be the tmpfs mount point mount_tmpfs
-    """
-    ls_file_name = "ls_batch_command_list.txt"
-    size_list_file = "file_list_with_sizes.txt"
-    cp_file_name = "cp_batch_command_list.txt"
-
-    num_skipped = 0
-
-    # handling windows os special treatment
-    file_storage = storage.mount_point
-    if storage.mount_point is None:
-        # this implies we're using the working directory. Make sure PICKLE_DIR exists
-        if os.path.exists(PICKLE_DIR):
-            file_storage = PICKLE_DIR
-        else:
-            log_print(f"Error: {PICKLE_DIR} does not exist. Exiting.")
-            sys.exit(1)
-    elif not os.path.ismount(file_storage):
-        log_print(f"Error: {file_storage} is not mounted. Exiting.")
-        sys.exit(1)
-
-    # Create a file with the list of files to check (although this takes an extra loop, s5cmd makes it worth it)
-    with open(ls_file_name, 'w+') as f:
-        # writing a bucket path for each line in our file list file. A file format is needed for s5cmd
-        for biopj in biopj_block:
-            f.write(f'ls {S3_METADATA_DIR}/{biopj}.\n')
-
-    # List files with sizes using s5cmd (remember, this only looks through a single block of bioprojects)
-    # note: s5cmd does not support piping, so we have to use awk here as opposed to in the previous step for each line
-    command_list = SHELL_PREFIX + f"s5cmd run {ls_file_name} | " + SHELL_PREFIX + f"awk \'{{print $(NF-1), $NF}}\' > {size_list_file}"
-    process = subprocess.run(command_list, shell=True, stderr=subprocess.PIPE)
-    if process.stderr:
-        error_msg = process.stderr.decode().split('\n')
-        with open(PROBLEMATIC_BIOPJS_FILE, 'a') as blacklist_file:
-            for line in error_msg:
-                if 'no object found' in line:
-                    biopj = line.split('/')[-1].split('.')[0]
-                    log_print(f"could not find a metadata file for {biopj}")
-                    blacklist_file.write(f"{biopj} had no metadata file. Consider rescraping NCBI then recondensing into mwaspkl files\n")
-                    num_skipped += 1
-    os.remove(ls_file_name)  # useless now that we have the file_list_with_sizes.txt
-
-    # filter files by size, and also set create each BioProjectInfo object and load them into a dictionary
-    biopj_info_dict = {}
-    total_size = 0
-    with open(size_list_file, 'r') as read_file, open(cp_file_name, 'w') as write_file, open(PROBLEMATIC_BIOPJS_FILE, 'a') as blacklist_file:
-        for line in read_file:
-            parts = line.split()
-            # remember, we're reading from a ls output file that was reformatted by awk: parts[0] is an int, parts[1] is <biopj>.pickle
-            size, file = int(parts[0]), parts[1]
-
-            biopj_name = file.split('.')[0]  # get <biopj> from <biopj>.pickle
-            if size == 1:  # a single byte file is an empty file, due to the way I made the condensing script
-                # but since blacklisted files have a 1 byte while true empty files have a 0 byte, we must read the file
-                if biopj_name in BLACKLIST:
-                    reason = "blacklisted"
-                else:
-                    reason = "empty"
-                log_print(f"Skipping {biopj_name} because it is {reason}.")
-                blacklist_file.write(f"{biopj_name} was_{reason}\n")
-                num_skipped += 1
-                continue
-
-            # TODO: also ignore metadata files that have less than 4 biosamples - we'll need to have queried the mwas database for this
-
-            elif size <= MAX_PROJECT_SIZE and biopj_name not in BLACKLIST:
-                write_file.write(f"cp -f {S3_METADATA_DIR}/{file} {file_storage}\n")
-                biopj_info_dict[biopj_name] = BioProjectInfo(biopj_name, f"{file_storage}/{file}", size)
-                total_size += size
-            else:
-                log_print(f"Skipping {biopj_name} because it is too large, with {size} bytes.")
-                blacklist_file.write(f"{biopj_name} too_large\n")
-                num_skipped += 1
-            # check if we've reached the limit
-            if total_size >= PICKLE_SPACE_LIMIT:
-                log_print(f"Reached the limit of {PICKLE_SPACE_LIMIT} bytes. Only downloaded {len(biopj_info_dict)} files.")
-                break
-    os.remove(size_list_file)
-
-    # Download the filtered files to tmp_dir
-    command_cp = f"s5cmd run {cp_file_name}"
-    subprocess.run(SHELL_PREFIX + command_cp, shell=True)
-    os.remove(cp_file_name)
-
-    return biopj_info_dict, num_skipped
-
-
 def get_log_fold_change(true, false):
     """calculate the log fold change of true with respect to false
         if true and false is 0, then return 0
@@ -814,128 +780,7 @@ def mean_diff_statistic(x, y, axis):
     return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 
-def process_group_normal(metadata_df: pd.DataFrame, biosample_ref: list, group_rpm_lst: np.array,
-                         group_name: str, bioproject_name: str, skip_tests: bool) -> str:
-    """Process the given group, and return an output file
-    """
-    # num_metasets = metadata_df.shape[0]
-    # num_biosamples = len(biosample_ref)
-    result = ''
-    reusable_results = {}  # save results while a group is processed, so we can avoid recomputing them
-
-    for _, row in metadata_df.iterrows():
-        test_start_time = 0
-        if PERFOMANCE_STATS:
-            test_start_time = time.time()
-            tracemalloc.start()
-
-        index_is_inlcude = row['include?']
-        index_list = row['biosample_index_list']
-
-        # deprecated
-        # num_true = len(index_list) if index_is_inlcude else num_biosamples - len(index_list)
-        # num_false = len(biosample_ref) - num_true
-
-        # could be optimized?
-        true_rpm, false_rpm = [], []
-        for i, rpm_val in enumerate(group_rpm_lst):
-            if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
-                continue
-            if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
-                true_rpm.append(rpm_val)
-            else:
-                false_rpm.append(rpm_val)
-
-        num_true, num_false = len(true_rpm), len(false_rpm)
-
-        if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
-            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} because num_true or num_false < 2', 2)
-            continue
-
-        # calculate desecriptive stats
-        # NON CORRECTED VALUES
-        mean_rpm_true = np.nanmean(true_rpm)
-        mean_rpm_false = np.nanmean(false_rpm)
-        sd_rpm_true = np.nanstd(true_rpm)
-        sd_rpm_false = np.nanstd(false_rpm)
-
-        # skip if both conditions have 0 reads (this should never happen, but just in case)
-        if mean_rpm_true == mean_rpm_false == 0:
-            continue
-
-        # get list of all attributes sep by ; delim
-        fields = row['attributes'].split('; ')
-        if skip_tests or all(field in BLACKLISTED_METADATA_FIELDS for field in fields):
-            if INCLUDE_SKIPPED_STATS:
-                continue
-            fold_change, test_statistic, p_value = '', '', ''
-            true_biosamples, false_biosamples = '', ''
-            status = 'skipped_statistical_testing'
-        else:
-            test_key = (num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false)
-            if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
-                fold_change, test_statistic, p_value, status = reusable_results[test_key]
-                log_print(f"Reusing results for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}", 2)
-            else:
-                # calculate fold change and check if any values are nan
-                fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
-
-                # if there are at least 4 values in each group, run a permutation test, otherwise run a t test
-                try:
-                    log_print(f"Running statistical test for bioproject: {bioproject_name}, group: {group_name}, set: {row['attributes']}:{row['values']}", 2)
-                    if min(num_false, num_true) < 4 or ONLY_T_TEST:
-                        # scipy t test
-                        status = 't_test'
-                        test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
-                                                                       mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
-                                                                       equal_var=False)
-                    else:
-                        # run a permutation test
-                        status = 'permutation_test'
-                        num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
-                        res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
-                                               vectorized=True)
-                        p_value, test_statistic = res.pvalue, res.statistic
-                except Exception as e:
-                    log_print(f'Error running statistical test for {group_name} - {row["attributes"]}:{row["values"]} - {e}', 2)
-                    continue
-
-                reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
-
-            if p_value < P_VALUE_THRESHOLD:
-                status += '; significant'
-                too_many, threshold = 'too many biosamples to list', 200
-                true_biosamples = '; '.join([biosample_ref[i] for i in index_list]) \
-                    if (num_true < threshold and index_is_inlcude) or (num_false < threshold and not index_is_inlcude) else too_many
-                false_biosamples = '; '.join([biosample_ref[i] for i in range(len(biosample_ref)) if i not in index_list]) \
-                    if (num_true < threshold and not index_is_inlcude) or (num_false < threshold and index_is_inlcude) else too_many
-                if not index_is_inlcude:
-                    true_biosamples, false_biosamples = false_biosamples, true_biosamples
-            else:
-                true_biosamples, false_biosamples = '', ''
-            log_print(f"Finished with p-value: {p_value}", 2)
-
-        if PERFOMANCE_STATS:
-            _, peak_memory = tracemalloc.get_traced_memory()
-            tracemalloc.stop()
-            extra_info = f'{time.time() - test_start_time}, {peak_memory},'
-        else:
-            extra_info = ''
-
-        # record the output
-        this_result = (f"{bioproject_name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
-                       f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
-        result += this_result
-        global progress
-        progress += int(not skip_tests)
-        log_print(this_result, 2)
-        # if num_tests > 0:
-        #     log_print(f"Progress: {progress} tests completed of {num_tests} tests completed for {bioproject_name}. ({round(100 * (progress / num_tests), 3)}%)\n")
-
-    return result
-
-
-def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: MountTmpfs) -> None:
+def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str]) -> None:
     """Run MWAS on the given data file
     input_info is a tuple of the group and quantifier column names
     storage will usually be the tmpfs mount point mount_tmpfs
@@ -999,7 +844,8 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
             f.write(f"{row['bioproject']},blacklisted - too_large_to_run_on_lambda\n")
     del rejected
 
-    # for each bioproject in main_df, count the number of unique groups, and then number of groups that have less than X rows in main_df implying they should be skipped. Also add the bioproject to rejected if all groups are skipped
+    # for each bioproject in main_df, count the number of unique groups, and then number of groups that have less than X rows in main_df
+    # implying they should be skipped. Also add the bioproject to rejected if all groups are skipped
     def calculate_groups_and_skipped_groups(df):
         num_groups = df['group'].nunique()
         num_skipped_groups = (df['group'].value_counts() < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD).sum()
@@ -1024,102 +870,103 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
 
     num_bioprojects = len(biopj_info_df)
 
-
-    # create bioproject objects for each bioproject in biopj_info_df and store them in a dictionary
+    # create bioproject objects for each bioproject in biopj_info_df and dispatch the lambdas and store them in a dictionary
     bioprojects_dict = {}
+    total_perm_tests = total_lambda_jobs = 0
+    LAMBDA_CLIENT = boto3.client('lambda')
     for _, row in biopj_info_df.iterrows():
-        bioprojects_dict[row['bioproject']] = BioProjectInfo(row['bioproject'], row['metadata_path'], row['n_biosamples'])
+        bioproject_name = row['bioproject']
+        bioproject_obj = BioProjectInfo(bioproject_name, row['condensed_md_file_size'], row['n_biosamples'], row['n_sets'],
+                                        row['n_permutation_sets'], row['n_skippable_permutation_sets'], row['n_groups'], row['n_skipped_groups'])
+        # get subset of main_df that belongs to this bioproject
+        subset_df = main_df[main_df['bio_project'] == bioproject_name]
+        n_perm_tests, lambda_jobs = bioproject_obj.batch_lambda_jobs(subset_df, 60)
+        total_perm_tests += n_perm_tests
+        total_lambda_jobs += lambda_jobs
+        # dispatch all jobs for this bioproject
+        bioproject_obj.dispatch_all_lambda_jobs(subset_df, LAMBDA_CLIENT)
+        bioprojects_dict[row['bioproject']] = bioproject_obj
 
-
-
-    global BLOCK_SIZE, PROGRESS
-    if num_bioprojects < BLOCK_SIZE:
-        BLOCK_SIZE = num_bioprojects
-    num_blocks = max(1, num_bioprojects // BLOCK_SIZE)
-    log_print(f"Number of bioprojects to process: {num_bioprojects}, Number of lambda blocks: {num_blocks}, Number of ignored bioprojects: {len(bioprojects_list) - num_bioprojects}", 2)
-    PROGRESS.update_large_progress('Processing', num_bioprojects, 0, 0)
-
-    # TODO: time & space estimator: get subsets of main_df for all bioprojects to get num groups and num skipped groups
-    # and also query all bioprojects to mwas_database to get ref_list length, num metadata tests, and other stuff etc
-    # use that to estimate the number of tests that will be run - useful for PARALLELIZING and giving user an idea of how long it will take
+    log_print(f"Number of bioprojects to process: {num_bioprojects}, Number of ignored bioprojects: {len(bioprojects_list) - num_bioprojects}, "
+              f"Number of lambda blocks: {total_lambda_jobs}, Number of permutation tests: {total_perm_tests}")
+    # PROGRESS.update_large_progress('Processing', num_bioprojects, 0, 0)
 
     print("preprocessing time: ", time.time() - prep_start_time)
 
-    # ================
-    # PROCESSING
-    sync_s3()
-    # ================
-
-    i = 0
-    while i < num_bioprojects:  # for each block (roughly) in bioprojects
-        # GET LIST OF BIOPROJECTS IN THIS CURRENT BLOCK
-        if i + BLOCK_SIZE > num_bioprojects:  # currently inside a non-full block
-            biopj_block = bioprojects_list[i:]  # just get whatever's left
-        else:
-            biopj_block = bioprojects_list[i: i + BLOCK_SIZE]  # get a block's worth of bioprojects
-
-        # GET METADATA FOR BIOPROJECTS IN THIS BLOCK
-        biopj_info_dict, num_skipped = metadata_retrieval(biopj_block, storage)
-        if len(biopj_info_dict) + num_skipped < BLOCK_SIZE and num_bioprojects > 0:
-            # handling since we reached the space limit before downloading a full blocks worth of bioprojects
-            i += len(biopj_info_dict)
-        else:
-            i += BLOCK_SIZE  # move to the next block
-            if len(biopj_info_dict) == 0:
-                log_print(f"Error: no bioprojects were processed in this block. Moving to the next block.")
-        num_bioprojects -= num_skipped
-        del biopj_block
-
-        # BEGIN PROCESSING THE BIOPROJECTS IN THIS BLOCK
-        if not PARALLELIZING:
-            # PROCESS THE BLOCK
-            for biopj in biopj_info_dict.keys():
-                global progress
-                progress = 0
-                try:
-                    output_text_lines = process_bioproject(biopj_info_dict[biopj], main_df)
-                except Exception as e:
-                    log_print(f"Error processing bioproject {biopj}: {e}", 2)
-                    biopj_info_dict[biopj].delete_metadata()
-                    output_text_lines = f'error: {e}'
-
-                # OUTPUT FILE (FOR THIS PARTICULAR BIOPROJECT) TODO: postprocessing will involve combining all these files stored on disk
-                with open(PROBLEMATIC_BIOPJS_FILE, 'a') as f:
-                    if output_text_lines == 'all groups skipped':
-                        log_print(f"All groups were skipped for {biopj}. Not creating an output file for it.")
-                        f.write(f"{biopj} all_groups_skipped\n")
-                    elif 'error' in output_text_lines:
-                        log_print(f"Output file for {biopj} was not created due to an error: {output_text_lines}")
-                        f.write(f"{biopj} output_{output_text_lines}\n")
-                    elif output_text_lines is not None and output_text_lines:
-                        try:
-                            # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
-                            with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as out_file:
-                                extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
-                                out_file.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
-                                out_file.write(output_text_lines)
-                            log_print(f"Output file for {biopj} created successfully")
-                        except Exception as e:
-                            log_print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
-                            f.write(f"{biopj} output_error_despite_successful_process\n")
-                    elif output_text_lines is not None and output_text_lines == '':
-                        log_print(f"Output file for {biopj} is empty. Not creating a file for it.")
-                        f.write(f"{biopj} empty_output___this_is_strange\n")
-                    else:  # output_text_lines is None
-                        log_print(f"There was a problem with making an output file for {biopj}")
-                        f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided OR not enough runs provided for this bioproject\n")
-
-        else:  # PARALLELIZING
-            # TODO: IMPLEMENT PARALLELIZING
-            raise NotImplementedError
-
-        # now we're done processing an entire block
-        # TODO: STORE THE OUTPUT FILES IN S3
-        # concatenate all the output files in the block into one csv (spans multiple bioprojects)
-        # and then append-write to output file in the folder <hash_code> (create the output file if it doesn't exist yet)
-
-        # FREE UP EVERY ROW IN THE MAIN DATAFRAME THAT BELONGS TO THE CURRENT BLOCK BY INDEXING VIA BIOPROJECT
-        main_df = main_df[~main_df['bio_project'].isin(biopj_info_dict.keys())]
+    # # ================
+    # # PROCESSING
+    # sync_s3()
+    # # ================
+    #
+    # i = 0
+    # while i < num_bioprojects:  # for each block (roughly) in bioprojects
+    #     # GET LIST OF BIOPROJECTS IN THIS CURRENT BLOCK
+    #     if i + BLOCK_SIZE > num_bioprojects:  # currently inside a non-full block
+    #         biopj_block = bioprojects_list[i:]  # just get whatever's left
+    #     else:
+    #         biopj_block = bioprojects_list[i: i + BLOCK_SIZE]  # get a block's worth of bioprojects
+    #
+    #     # GET METADATA FOR BIOPROJECTS IN THIS BLOCK
+    #     biopj_info_dict, num_skipped = metadata_retrieval(biopj_block, storage)
+    #     if len(biopj_info_dict) + num_skipped < BLOCK_SIZE and num_bioprojects > 0:
+    #         # handling since we reached the space limit before downloading a full blocks worth of bioprojects
+    #         i += len(biopj_info_dict)
+    #     else:
+    #         i += BLOCK_SIZE  # move to the next block
+    #         if len(biopj_info_dict) == 0:
+    #             log_print(f"Error: no bioprojects were processed in this block. Moving to the next block.")
+    #     num_bioprojects -= num_skipped
+    #     del biopj_block
+    #
+    #     # BEGIN PROCESSING THE BIOPROJECTS IN THIS BLOCK
+    #     if not PARALLELIZING:
+    #         # PROCESS THE BLOCK
+    #         for biopj in biopj_info_dict.keys():
+    #             global progress
+    #             progress = 0
+    #             try:
+    #                 output_text_lines = process_bioproject(biopj_info_dict[biopj], main_df)
+    #             except Exception as e:
+    #                 log_print(f"Error processing bioproject {biopj}: {e}", 2)
+    #                 output_text_lines = f'error: {e}'
+    #
+    #             # OUTPUT FILE (FOR THIS PARTICULAR BIOPROJECT) TODO: postprocessing will involve combining all these files stored on disk
+    #             with open(PROBLEMATIC_BIOPJS_FILE, 'a') as f:
+    #                 if output_text_lines == 'all groups skipped':
+    #                     log_print(f"All groups were skipped for {biopj}. Not creating an output file for it.")
+    #                     f.write(f"{biopj} all_groups_skipped\n")
+    #                 elif 'error' in output_text_lines:
+    #                     log_print(f"Output file for {biopj} was not created due to an error: {output_text_lines}")
+    #                     f.write(f"{biopj} output_{output_text_lines}\n")
+    #                 elif output_text_lines is not None and output_text_lines:
+    #                     try:
+    #                         # STORE THE OUTPUT FILE IN temp folder on disk as a file <biopj>_output.csv
+    #                         with open(f"{OUTPUT_DIR_DISK}/{biopj}_output_{date}.csv", 'w') as out_file:
+    #                             extra_info = 'runtime_seconds,' if PERFOMANCE_STATS else ''
+    #                             out_file.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
+    #                             out_file.write(output_text_lines)
+    #                         log_print(f"Output file for {biopj} created successfully")
+    #                     except Exception as e:
+    #                         log_print(f"Error in creating output file for {biopj} even though we successfully processed it: {e}")
+    #                         f.write(f"{biopj} output_error_despite_successful_process\n")
+    #                 elif output_text_lines is not None and output_text_lines == '':
+    #                     log_print(f"Output file for {biopj} is empty. Not creating a file for it.")
+    #                     f.write(f"{biopj} empty_output___this_is_strange\n")
+    #                 else:  # output_text_lines is None
+    #                     log_print(f"There was a problem with making an output file for {biopj}")
+    #                     f.write(f"{biopj} processing_error OR biproject_was_processed_despite_no_associated_runs_provided OR not enough runs provided for this bioproject\n")
+    #
+    #     else:  # PARALLELIZING
+    #         # TODO: IMPLEMENT PARALLELIZING
+    #         raise NotImplementedError
+    #
+    #     # now we're done processing an entire block
+    #     # TODO: STORE THE OUTPUT FILES IN S3
+    #     # concatenate all the output files in the block into one csv (spans multiple bioprojects)
+    #     # and then append-write to output file in the folder <hash_code> (create the output file if it doesn't exist yet)
+    #
+    #     # FREE UP EVERY ROW IN THE MAIN DATAFRAME THAT BELONGS TO THE CURRENT BLOCK BY INDEXING VIA BIOPROJECT
+    #     main_df = main_df[~main_df['bio_project'].isin(biopj_info_dict.keys())]
 
     # ================
     # POST-PROCESSING
@@ -1137,7 +984,7 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                     with open(f"{OUTPUT_DIR_DISK}/{file}", 'r') as f:
                         with open(f"{OUTPUT_DIR_DISK if not S3_OUTPUT_DIR else TEMP_LOCAL_BUCKET}/{combined_output_name}", 'a') as combined:
                             if not header_is_written:
-                                extra_info = 'runtime_seconds,memory_usage_bytes,' if PERFOMANCE_STATS else ''
+                                extra_info = 'runtime_seconds,' if PERFOMANCE_STATS else ''
                                 combined.write(OUT_COLS_STR % (input_info[0], extra_info) + '\n')
                                 header_is_written = True
                             next(f)  # ignore first line
@@ -1148,14 +995,12 @@ def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str], storage: M
                 continue
 
 
-def cleanup(mount_tmpfs: MountTmpfs) -> Any:
+def cleanup() -> Any:
     """Clear out all files in the pickles directory
     """
     if os.path.exists(PICKLE_DIR):
         rmtree(PICKLE_DIR)
         log_print(f"Cleared out all files in {PICKLE_DIR}")
-    if platform.system() == 'Linux':
-        mount_tmpfs.unmount()
 
     if os.path.exists('cp_batch_command_list.txt'):
         os.remove('cp_batch_command_list.txt')
@@ -1280,35 +1125,27 @@ def main(args: list[str], using_logging=False) -> int | None | tuple[int, str]:
             log_print("File not found", 0)
             return 1, 'file not found'
 
-        # MOUNT TMPFS
-        mount_tmpfs = MountTmpfs()
-        mount_tmpfs.mount()
-        if not mount_tmpfs.is_mounted:
-            log_print("Did not mount tmpfs, likely because this is a Windows system. Using working directory instead.")
         # CREATE OUTPUT DIRECTORY
         if not os.path.exists(OUTPUT_DIR_DISK):
             os.mkdir(OUTPUT_DIR_DISK)
 
-        register(cleanup, mount_tmpfs)  # handle cleanup on exit
+        register(cleanup)  # handle cleanup on exit
 
         # RUN MWAS
         log_print("===============\nRunning MWAS...\n===============", 0)
-        run_on_file(input_df, (group_by, quantifying_by), mount_tmpfs)
+        run_on_file(input_df, (group_by, quantifying_by))
         log_print("MWAS completed successfully", 0)
 
         # print(display_memory())
         time_taken = round((time.time() - time_start) / 60, 3)
         log_print(f"Time taken: {time_taken} minutes", 0)
 
-        PROGRESS.update_large_progress('Completed', PROGRESS.num_bioprojects, 0, 0)
+        # PROGRESS.update_large_progress('Completed', PROGRESS.num_bioprojects, 0, 0)
 
         # =================
         # DONE
         sync_s3()
         # =================
-
-        # UNMOUNT TMPFS
-        mount_tmpfs.unmount()
 
         if S3_OUTPUT_DIR:
             # remove the local copy of the s3 bucket

@@ -32,4 +32,4 @@ def f(lambda_area: int, n_permutation_sets: int, groups: list[str]) -> list[dict
 
 
 def test_f():
-    f(25, 23, ['A', 'B', 'C', 'D', 'E', 'F'])
+    f(112, 532, ['A', 'B', 'C', 'D', 'E', 'F'])

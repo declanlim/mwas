@@ -8,6 +8,14 @@ import os
 
 from pandas import DataFrame
 
+BLACKLISTED_METADATA_FIELDS = {
+    'publication_date', 'center_name', 'first_public', 'last_public', 'last_update', 'INSDC center name', 'INSDC first public',
+    'INSDC last public', 'INSDC last update', 'ENA center name', 'ENA first public', 'ENA last public', 'ENA last update',
+    'ENA-FIRST-PUBLIC', 'ENA-LAST-UPDATE', 'DDBJ center name', 'DDBJ first public', 'DDBJ last public', 'DDBJ last update',
+    'Contacts/Contact/Name/First', 'Contacts/Contact/Name/Middle', 'Contacts/Contact/Name/Last', 'Contacts/Contact/@email',
+    'Name/@url', 'name/@url', 'collected_by', 'when', 'submission_date'
+}
+
 
 def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=False) -> tuple[Any, DataFrame, str, DataFrame | tuple | Any, bool]:
     """takes a metadata dataframe from a bioproject (accessed by biosample_id)
@@ -101,10 +109,12 @@ def metadata_to_set_accession(metadata_df: pd.DataFrame, update_metadata_df=Fals
             test_type = 't-test'
         else:
             test_type = 'permutation-test'
+        fields = attributes.split('; ')
+        skippable = 1 if all(field in BLACKLISTED_METADATA_FIELDS for field in fields) else 0
         new_df_data.append({  # important to force values to be string - fixes a bug related to mixed datatypes in one column
-            'attributes': attributes, 'values': str(values), 'biosample_index_list': index_list, 'include?': include, 'test_type': test_type
+            'attributes': attributes, 'values': str(values), 'biosample_index_list': index_list, 'include?': include, 'test_type': test_type, 'skippable?': skippable
         })
-    new_df = pd.DataFrame(new_df_data, columns=['attributes', 'values', 'biosample_index_list', 'include?', 'test_type'])
+    new_df = pd.DataFrame(new_df_data, columns=['attributes', 'values', 'biosample_index_list', 'include?', 'test_type', 'skippable?'])
     empty_result = False
     if new_df.shape[0] == 0:
         comment += "No sets were generated from the metadata dataframe. "

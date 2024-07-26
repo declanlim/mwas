@@ -15,7 +15,7 @@ fi
 
 
 local_destination=~/raw_metadata_csvs
-S3_RAW_METADATA_DIR=s3://serratus-biosamples/bioprojects_csv/
+S3_RAW_METADATA_DIR=s3://serratus-biosamples/bioprojects_csv/*
 local_condensing_destination=~/converted_metadata_pickles
 echo "set up dirs"
 
