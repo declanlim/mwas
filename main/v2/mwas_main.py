@@ -8,14 +8,12 @@ import platform
 import subprocess
 import pickle
 import time
-import tracemalloc
 import logging
 import json
 from atexit import register
 from shutil import rmtree
 from typing import Any
 from multiprocessing import Manager, Pool, cpu_count
-
 
 import boto3
 # import required libraries
@@ -68,6 +66,7 @@ DECODING_ERRORS = {
     0: 'No issues.'
 }
 
+
 def decode_comment_code(comment_code: int) -> str:
     """Converts a code to a comment."""
     comments = []
@@ -75,7 +74,6 @@ def decode_comment_code(comment_code: int) -> str:
         if comment_code & (1 << bit):
             comments.append(msg)
     return ' '.join(comments)
-
 
 
 # system & path constants
@@ -480,149 +478,86 @@ class BioProjectInfo:
         else:
             result = self.process_bioproject_perms(job[0], job[1])
 
-        log_print(f"FINISHED processing {self.name} in {round(time.time() - time_start, 3)} seconds\n")
+        log_print(f"FINISHED PROCESSING {self.name} in {round(time.time() - time_start, 3)} seconds\n")
         return result
 
-    def process_bioproject_other(self) -> str | None:
-        """Process the given group, and return an output file
-            """
-        result = ''
-        skip_tests = False
-        reusable_results = {}  # save results while a group is processed, so we can avoid recomputing them
-        for group in self.groups:
-            if self.rpm_map[group][1]:  # if the group should be skipped
-                if INCLUDE_SKIPPED_STATS:
-                    skip_tests = True
-                else:
-                    continue
-            for _, row in self.metadata_df.iterrows():
-                test_start_time = time.time()
-
-                index_is_inlcude = row['include?']
-                index_list = row['biosample_index_list']
-
-                # could be optimized?
-                true_rpm, false_rpm = [], []
-                for i, rpm_val in enumerate(self.rpm_map):
-                    if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
-                        continue
-                    if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
-                        true_rpm.append(rpm_val)
-                    else:
-                        false_rpm.append(rpm_val)
-
-                num_true, num_false = len(true_rpm), len(false_rpm)
-
-                if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
-                    log_print(f'skipping {group} - {row["attributes"]}:{row["values"]} '
-                              f'because num_true or num_false < 2', 2)
-                    continue
-
-                # calculate desecriptive stats
-                # NON CORRECTED VALUES
-                mean_rpm_true = np.nanmean(true_rpm)
-                mean_rpm_false = np.nanmean(false_rpm)
-                sd_rpm_true = np.nanstd(true_rpm)
-                sd_rpm_false = np.nanstd(false_rpm)
-
-                # skip if both conditions have 0 reads (this should never happen, but just in case)
-                if mean_rpm_true == mean_rpm_false == 0:
-                    continue
-
-                # get list of all attributes sep by ; delim
-                fields = row['attributes'].split('; ')
-                if skip_tests or all(field in BLACKLISTED_METADATA_FIELDS for field in fields):
-                    if INCLUDE_SKIPPED_STATS:
-                        continue
-                    fold_change, test_statistic, p_value = '', '', ''
-                    true_biosamples, false_biosamples = '', ''
-                    status = 'skipped_statistical_testing'
-                else:
-                    test_key = (num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false)
-                    if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
-                        fold_change, test_statistic, p_value, status = reusable_results[test_key]
-                        log_print(
-                            f"Reusing results for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}",2)
-                    else:
-                        # calculate fold change and check if any values are nan
-                        fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
-
-                        # if there are at least 4 values in each group, run a permutation test, otherwise run a t test
-                        try:
-                            log_print(
-                                f"Running statistical test for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
-                            if min(num_false, num_true) < 4 or ONLY_T_TEST:
-                                # scipy t test
-                                status = 't_test'
-                                test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true,
-                                                                               mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
-                                                                               equal_var=False)
-                            else:
-                                # run a permutation test
-                                status = 'permutation_test'
-                                num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
-                                res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
-                                                       vectorized=True)
-                                p_value, test_statistic = res.pvalue, res.statistic
-                        except Exception as e:
-                            log_print(f'Error running statistical test for {group} - {row["attributes"]}:{row["values"]} - {e}', 2)
-                            continue
-
-                        reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
-
-                    if p_value < P_VALUE_THRESHOLD:
-                        status += '; significant'
-                        too_many, threshold = 'too many biosamples to list', 200
-                        true_biosamples = '; '.join([self.metadata_ref_lst[i] for i in index_list]) \
-                            if (num_true < threshold and index_is_inlcude) or (num_false < threshold and not index_is_inlcude) else too_many
-                        false_biosamples = '; '.join([self.metadata_ref_lst[i] for i in range(len(self.metadata_ref_lst)) if i not in index_list]) \
-                            if (num_true < threshold and not index_is_inlcude) or (num_false < threshold and index_is_inlcude) else too_many
-                        if not index_is_inlcude:
-                            true_biosamples, false_biosamples = false_biosamples, true_biosamples
-                    else:
-                        true_biosamples, false_biosamples = '', ''
-                    log_print(f"Finished with p-value: {p_value}", 2)
-
-                if PERFOMANCE_STATS:
-                    _, peak_memory = tracemalloc.get_traced_memory()
-                    tracemalloc.stop()
-                    extra_info = f'{time.time() - test_start_time}, {peak_memory},'
-                else:
-                    extra_info = ''
-
-                # record the output
-                this_result = (
-                    f"{self.name},{group},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
-                    f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n")
-
-                log_print(this_result, 2)
-                shared_dict[row['test_id']] = this_result
-            return result
-
-    def process_set_ttest(self, shared_dict: dict, row: dict) -> None:
-        """Process a single set of t tests
-        """
-        test_start_time = time.time()
-
-        index_is_inlcude, index_list = row['include'], row['biosample_index_list']
-        group_name, group_rpm_lst = row['group'], row['group_rpm_list']
-
+    def get_test_stats(self, index_is_include, index_list, rpm_map, group_name, attributes, values) \
+            -> tuple[float, float, float, float, float, float, list, list, Any] | None:
+        """get the test stats for the given group"""
         # could be optimized?
         true_rpm, false_rpm = [], []
-        for i, rpm_val in enumerate(group_rpm_lst):
+        for i, rpm_val in enumerate(rpm_map):
             if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
                 continue
-            if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
+            if (i in index_list and index_is_include) or (i not in index_list and not index_is_include):
                 true_rpm.append(rpm_val)
             else:
                 false_rpm.append(rpm_val)
 
         num_true, num_false = len(true_rpm), len(false_rpm)
 
-        if num_true < 2 or num_false < 2:
-            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} '
+        if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
+            log_print(f'skipping {group_name} - {attributes}:{values} '
                       f'because num_true or num_false < 2', 2)
-            return
+            return None
+
+        # calculate desecriptive stats
+        # NON CORRECTED VALUES
+        mean_rpm_true = np.nanmean(true_rpm)
+        mean_rpm_false = np.nanmean(false_rpm)
+        sd_rpm_true = np.nanstd(true_rpm)
+        sd_rpm_false = np.nanstd(false_rpm)
+
+        # skip if both conditions have 0 reads (this should never happen, but just in case)
+        if mean_rpm_true == mean_rpm_false == 0:
+            return None
+
+        # calculate fold change
+        def get_log_fold_change(true, false):
+            """calculate the log fold change of true with respect to false
+                if true and false is 0, then return 0
+            """
+            if true == 0 and false == 0:
+                return 0
+            elif true == 0:
+                return 'negative inf'
+            elif false == 0:
+                return 'inf'
+            else:
+                return np.log2(true / false)
+
+        fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
+
+        return num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change
+
+    def process_bioproject_other(self) -> str | None:
+        """Process the given group, and return an output file
+            """
+        def run_ttests_for_group(shared_results, group):
+            reusable_results = {}
+            results = ''
+            for _, row in self.metadata_df.iterrows():
+                new_row = {
+                    'include': row['include?'],
+                    'biosample_index_list': row['biosample_index_list'],
+                    'group_rpm_list': self.rpm_map[group],
+                    'group': group,
+                    'attributes': row['attributes'],
+                    'values': row['values'],
+                    'test_id': -1
+                }
+                self.process_set_test(results, new_row, 't_test', reusable_results)
+            shared_results[group] = results
+            return results
+
+        num_workers = cpu_count()
+        with Manager() as manager:
+            shared_results = manager.dict()
+            with Pool(processes=num_workers) as pool:
+                results = pool.starmap(run_ttests_for_group, [(shared_results, group) for group in self.groups])
+
+        log_print(f"Finished processing tests for {self.name}\n")
+        return results
 
     def process_bioproject_perms(self, job_groups, num_tests) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
@@ -633,7 +568,8 @@ class BioProjectInfo:
             start, end = job_groups[group]
             # get subset of metadata_df that are permutation tests and aren't blacklisted fields
             self.metadata_df = self.metadata_df[self.metadata_df['test_type'] == 'permutation-test']
-            self.metadata_df = self.metadata_df[self.metadata_df['skipppable?'] == 0]
+            if not INCLUDE_SKIPPED_STATS:
+                self.metadata_df = self.metadata_df[self.metadata_df['skippable?'] == 0]
             sets_subset_df = self.metadata_df.iloc[start:end]
 
             # add the tests to the tests list
@@ -650,68 +586,64 @@ class BioProjectInfo:
                 test_id += 1
         del self.metadata_df
 
-        num_workers = cpu_count()
+        num_workers = self.num_conc_procs
         with Manager() as manager:
             shared_results = manager.dict()  # Shared dictionary
+            reusable_keys = manager.dict()
             with Pool(processes=num_workers) as pool:
-                results = pool.starmap(self.process_set_perm, [(shared_results, test) for test in tests])
+                results = pool.starmap(self.process_set_test, [(shared_results, test, 'permutation_test', reusable_keys) for test in tests])
 
         log_print(f"Finished processing tests for {self.name}\n")
         return results
 
-    def process_set_perm(self, shared_dict: dict, row: dict) -> None:
+    def process_set_test(self, results: dict | str, row: dict, test_type: str, reusable_results: dict) -> None:
         """Process a single set of permutation tests
+        if test_type is t_test then results is a string,
+        if test_type is permutation_test then results is a dictionary
         """
         test_start_time = time.time()
 
+        group, rpm_list = row['group'], row['group_rpm_list']
         index_is_inlcude, index_list = row['include'], row['biosample_index_list']
-        group_name, group_rpm_lst = row['group'], row['group_rpm_list']
-
-        # could be optimized?
-        true_rpm, false_rpm = [], []
-        for i, rpm_val in enumerate(group_rpm_lst):
-            if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
-                continue
-            if (i in index_list and index_is_inlcude) or (i not in index_list and not index_is_inlcude):
-                true_rpm.append(rpm_val)
-            else:
-                false_rpm.append(rpm_val)
-
-        num_true, num_false = len(true_rpm), len(false_rpm)
-
-        if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
-            log_print(f'skipping {group_name} - {row["attributes"]}:{row["values"]} '
-                      f'because num_true or num_false < 2', 2)
+        test_key = self.get_test_stats(index_is_inlcude, index_list, rpm_list, group, row['attributes'], row['values'])
+        if test_key is None:
             return
+        num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change = test_key
+        test_key = test_key + (group,)
+        if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
+            test_statistic, p_value, status = reusable_results[test_key]
+            log_print(f"Reusing results for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
+        else:
+            log_print(f"Running {test_type} for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
+            try:
+                if test_type == 't_test':
+                    # T TEST
+                    assert min(num_false, num_true) < 4
+                    status = 't_test'
+                    test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true, mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
+                                                                   equal_var=False)
+                    reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
 
-        # calculate desecriptive stats
-        # NON CORRECTED VALUES
-        mean_rpm_true = np.nanmean(true_rpm)
-        mean_rpm_false = np.nanmean(false_rpm)
-        sd_rpm_true = np.nanstd(true_rpm)
-        sd_rpm_false = np.nanstd(false_rpm)
+                elif test_type == 'permutation_test':
+                    # PERMUTATION TEST
+                    assert min(num_false, num_true) >= 4
+                    status = 'permutation_test'
+                    num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
 
-        # skip if both conditions have 0 reads (this should never happen, but just in case)
-        if mean_rpm_true == mean_rpm_false == 0:
-            return
+                    def mean_diff_statistic(x, y, axis):
+                        """if -ve, then y is larger than x"""
+                        return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
-        # calculate fold change and check if any values are nan
-        fold_change = get_log_fold_change(mean_rpm_true, mean_rpm_false)
+                    res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples, vectorized=True)
+                    p_value, test_statistic = res.pvalue, res.statistic
 
-        # if there are at least 4 values in each group, run a permutation test, otherwise run a t test
-        try:
-            log_print(
-                f"Running permutation test for bioproject: {self.name}, group: {group_name}, set: {row['attributes']}:{row['values']}",
-                2)
-            assert min(num_false, num_true) >= 4
-            status = 'permutation_test'
-            num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
-            res = permutation_test((true_rpm, false_rpm), statistic=mean_diff_statistic, n_resamples=num_samples,
-                                   vectorized=True)
-            p_value, test_statistic = res.pvalue, res.statistic
-        except Exception as e:
-            log_print(f'Error running permutation test for {group_name} - {row["attributes"]}:{row["values"]} - {e}', 2)
-            return
+                else:
+                    log_print(f"Error: unknown test type {test_type}", 2)
+                    return
+                reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
+            except Exception as e:
+                log_print(f"Error running permutation test for {row['group']} - {row['attributes']}:{row['values']} - {e}", 2)
+                return
 
         if p_value < P_VALUE_THRESHOLD:
             status += '; significant'
@@ -726,18 +658,20 @@ class BioProjectInfo:
             true_biosamples, false_biosamples = '', ''
         log_print(f"Finished with p-value: {p_value}", 2)
 
-        if PERFOMANCE_STATS:
-            extra_info = f'{time.time() - test_start_time},'
-        else:
-            extra_info = ''
+        test_end_time = time.time() - test_start_time
+        print(f"Test took {test_end_time} seconds")
+        extra_info = f'{test_end_time},' if PERFOMANCE_STATS else ''
 
         # record the output
         this_result = (
-            f"{self.name},{group_name},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
+            f"{self.name},{row['group']},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},{extra_info}"
             f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},{test_statistic},{p_value},{true_biosamples},{false_biosamples}\n"
         )
         log_print(this_result, 2)
-        shared_dict[row['test_id']] = this_result
+        if row['test_id'] == -1:
+            results += this_result
+        else:
+            results[row['test_id']] = this_result
 
 
 def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd.DataFrame | None:
@@ -759,25 +693,6 @@ def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd
         except psycopg2.Error:
             log_print("Error in executing query")
             return None
-
-
-def get_log_fold_change(true, false):
-    """calculate the log fold change of true with respect to false
-        if true and false is 0, then return 0
-    """
-    if true == 0 and false == 0:
-        return 0
-    elif true == 0:
-        return 'negative inf'
-    elif false == 0:
-        return 'inf'
-    else:
-        return np.log2(true / false)
-
-
-def mean_diff_statistic(x, y, axis):
-    """if -ve, then y is larger than x"""
-    return np.mean(x, axis=axis) - np.mean(y, axis=axis)
 
 
 def run_on_file(data_file: pd.DataFrame, input_info: tuple[str, str]) -> None:
