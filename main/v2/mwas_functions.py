@@ -3,15 +3,12 @@
 # built-in libraries
 import math
 import os
-import sys
 import platform
 import subprocess
 import pickle
 import time
 import logging
 import json
-from atexit import register
-from shutil import rmtree
 from typing import Any
 from multiprocessing import Manager, Pool, cpu_count
 
@@ -55,7 +52,6 @@ BLACKLISTED_METADATA_FIELDS = {
 }
 
 # constants
-MAP_UNKNOWN = 0  # maybe np.nan. Use -1 for when IMPLOICIT_ZEROS is False
 NORMALIZING_CONST = 1000000  # 1 million
 LAMBDA_RANGE = (128 * 1024 ** 2, 2048 * 1024 ** 2)  # 128 MB to 10240 MB (max lambda memory size
 PERCENT_USED = 0.8  # 80% of the memory will be used
@@ -67,45 +63,89 @@ OUT_COLS = [
     'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value', 'true_biosamples', 'false_biosamples', 'test_time_duration'
 ]
 
-# logging
-USE_LOGGER = True
-logging_level = 2  # 0: no logging, 1: minimal logging, 2: verbose logging
 logging.basicConfig(level=logging.INFO)
-logger = None
-
-# flags
-IMPLICIT_ZEROS = True  # TODO: implement this flag for when it's False
-GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
-ALREADY_NORMALIZED = False  # if it's false, then we need to normalize the data by dividing quantifier by spots
-P_VALUE_THRESHOLD = 0.005
-INCLUDE_SKIPPED_GROUP_STATS = False  # if True, then the output will include the stats of the skipped tests
-TEST_BLACKLISTED_METADATA_FIELDS = False  # if False, then the metadata fields in BLACKLISTED_METADATA_FIELDS will be ignored
 
 
-def log_print(msg: Any, lvl: int = 1) -> None:
-    """Print a message if the logging level is appropriate"""
-    global logging_level, use_logger
-    if lvl <= logging_level:
-        if use_logger and isinstance(logger, logging.Logger):
-            logger.info(msg)
-        else:
-            print(msg)
+class Config:
+    """Class to store configuration settings (flags)"""
+    LOGGER = None
+    USE_LOGGER = 1
+    LOGGING_LEVEL = 2
+    IMPLICIT_ZEROS = 0
+    MAP_UNKNOWN = 0  # maybe np.nan. Use -1 for when IMPLICIT_ZEROS is False
+    GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
+    ALREADY_NORMALIZED = 0  # if it's false, then we need to normalize the data by dividing quantifier by spots
+    P_VALUE_THRESHOLD = 0.005
+    INCLUDE_SKIPPED_GROUP_STATS = 0  # if True, then the output will include the stats of the skipped tests
+    TEST_BLACKLISTED_METADATA_FIELDS = 0  # if False, then the metadata fields in BLACKLISTED_METADATA_FIELDS will be ignored
+
+    def to_json(self) -> dict:
+        """Convert the configuration settings to a dictionary
+        note none of the values are boolean originally, so we can convert them to strings"""
+        return {
+            'IMPLICIT_ZEROS': str(self.IMPLICIT_ZEROS),
+            'GROUP_NONZEROS_ACCEPTANCE_THRESHOLD': str(self.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD),
+            'ALREADY_NORMALIZED': str(self.ALREADY_NORMALIZED),
+            'P_VALUE_THRESHOLD': str(self.P_VALUE_THRESHOLD),
+            'INCLUDE_SKIPPED_GROUP_STATS': str(self.INCLUDE_SKIPPED_GROUP_STATS),
+            'TEST_BLACKLISTED_METADATA_FIELDS': str(self.TEST_BLACKLISTED_METADATA_FIELDS),
+            'LOGGING_LEVEL': str(self.LOGGING_LEVEL),
+            'USE_LOGGER': str(self.USE_LOGGER)
+        }
+
+    def load_from_json(self, config_dict: dict) -> None:
+        """Load the configuration settings from a dictionary"""
+        self.IMPLICIT_ZEROS = int(config_dict['IMPLICIT_ZEROS'])
+        self.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(config_dict['GROUP_NONZEROS_ACCEPTANCE_THRESHOLD'])
+        self.ALREADY_NORMALIZED = int(config_dict['ALREADY_NORMALIZED'])
+        self.P_VALUE_THRESHOLD = float(config_dict['P_VALUE_THRESHOLD'])
+        self.INCLUDE_SKIPPED_GROUP_STATS = int(config_dict['INCLUDE_SKIPPED_GROUP_STATS'])
+        self.TEST_BLACKLISTED_METADATA_FIELDS = int(config_dict['TEST_BLACKLISTED_METADATA_FIELDS'])
+        self.LOGGING_LEVEL = int(config_dict['LOGGING_LEVEL'])
+        self.USE_LOGGER = int(config_dict['USE_LOGGER'])
+
+    def log_print(self, msg: Any, lvl: int = 1) -> None:
+        """Print a message if the logging level is appropriate"""
+        if lvl <= self.LOGGING_LEVEL:
+            if self.USE_LOGGER and isinstance(self.LOGGER, logging.Logger):
+                self.LOGGER.info(msg)
+            else:
+                print(msg)
+
+    def set_log_level(self, level: int, use: bool) -> None:
+        """Set the logging level"""
+        Config.LOGGING_LEVEL = level
+        if not use:
+            Config.USE_LOGGER = 0
+
+    def set_logger(self, file_name: str) -> None:
+        """Create a logger"""
+        Config.LOGGER = logging.getLogger(file_name)
+        if Config.LOGGER.hasHandlers():
+            Config.LOGGER.handlers.clear()
+        fh = logging.FileHandler(file_name)
+        formatter = logging.Formatter("%(levelname)s - %(asctime)s - %(message)s")
+        fh.setFormatter(formatter)
+        Config.LOGGER.addHandler(fh)
+        Config.LOGGER.setLevel(logging.INFO)
 
 
 class BioProjectInfo:
     """Class to store information about a bioproject"""
 
-    def __init__(self, name: str, metadata_file_size: int, n_biosamples: int,
+    def __init__(self, config: Config, name: str, metadata_file_size: int, n_biosamples: int,
                  n_sets: int, n_permutation_sets: int, n_skippable_permutation_sets: int,
                  n_groups: int, n_skipped_groups: int, num_lambda_jobs: int = 0, num_conc_procs: int = 0,
                  groups: list[str] = None, jobs: list[tuple[dict[str, tuple[int, int]], int]] = None) -> None:
+        self.config = config
+
         self.name = name
         self.md_file_size = metadata_file_size
         self.n_sets = n_sets
         self.n_permutation_sets = n_permutation_sets
         self.n_skippable_permutation_sets = n_skippable_permutation_sets
         self.n_actual_permutation_sets = n_permutation_sets - n_skippable_permutation_sets \
-            if not TEST_BLACKLISTED_METADATA_FIELDS else n_permutation_sets
+            if not config.TEST_BLACKLISTED_METADATA_FIELDS else n_permutation_sets
         self.n_biosamples = n_biosamples
         self.n_groups = n_groups
         self.n_skipped_groups = n_skipped_groups
@@ -116,23 +156,22 @@ class BioProjectInfo:
         self.num_lambda_jobs = num_lambda_jobs
         self.num_conc_procs = num_conc_procs
         self.groups = [] if groups is None else groups
-        self.jobs = [] if jobs is None else jobs
+        self.jobs = [] if jobs is None else jobs  # only used in preprocessing stage
 
-    def to_dict(self) -> dict:
+    def to_json(self) -> dict:
         """Convert the bioproject info to a dictionary"""
         return {
             'name': self.name,
-            'metadata_file_size': self.md_file_size,
-            'n_biosamples': self.n_biosamples,
-            'n_sets': self.n_sets,
-            'n_permutation_sets': self.n_permutation_sets,
-            'n_skippable_permutation_sets': self.n_skippable_permutation_sets,
-            'n_groups': self.n_groups,
-            'n_skipped_groups': self.n_skipped_groups,
-            'num_lambda_jobs': self.num_lambda_jobs,
-            'num_conc_procs': self.num_conc_procs,
-            'groups': self.groups,
-            'jobs': self.jobs
+            'metadata_file_size': str(self.md_file_size),
+            'n_biosamples': str(self.n_biosamples),
+            'n_sets': str(self.n_sets),
+            'n_permutation_sets': str(self.n_permutation_sets),
+            'n_skippable_permutation_sets': str(self.n_skippable_permutation_sets),
+            'n_groups': str(self.n_groups),
+            'n_skipped_groups': str(self.n_skipped_groups),
+            'num_lambda_jobs': str(self.num_lambda_jobs),
+            'num_conc_procs': str(self.num_conc_procs),
+            'groups': str([str(g) for g in self.groups]) if self.groups else 'all',
         }
 
     def batch_lambda_jobs(self, main_df: pd.DataFrame, time_constraint: int) -> tuple[int, int]:
@@ -145,7 +184,7 @@ class BioProjectInfo:
         while mem_width * n_conc_procs > MAX_RAM_SIZE:
             n_conc_procs -= 1
         if n_conc_procs == 0:
-            log_print(f"Error: not enough memory to run a single test on a lambda functions for bio_project {self.name}")
+            self.config.log_print(f"Error: not enough memory to run a single test on a lambda functions for bio_project {self.name}")
             return 0, 0
         self.num_conc_procs = n_conc_procs
 
@@ -159,7 +198,7 @@ class BioProjectInfo:
 
             subset_df = main_df[main_df['bio_project'] == self.name]
             group_counts = subset_df['group'].value_counts()
-            self.groups = group_counts[group_counts >= GROUP_NONZEROS_ACCEPTANCE_THRESHOLD].index.tolist()
+            self.groups = group_counts[group_counts >= self.config.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD].index.tolist()
 
             num_tests_added = curr_group = left_off_at = 0
             for i in range(0, total_tests, lambda_area):
@@ -190,19 +229,10 @@ class BioProjectInfo:
 
         note lambda handler will call self.process_bioproject(...)
         """
-        bioproject_info = self.to_dict()
+        bioproject_info = self.to_json()
+        flags = self.config.to_json()
 
-        flags = {
-            'IMPLICIT_ZEROS': int(IMPLICIT_ZEROS),
-            'GROUP_NONZEROS_ACCEPTANCE_THRESHOLD': GROUP_NONZEROS_ACCEPTANCE_THRESHOLD,
-            'ALREADY_NORMALIZED': int(ALREADY_NORMALIZED),
-            'P_VALUE_THRESHOLD': P_VALUE_THRESHOLD,
-            'INCLUDE_SKIPPED_GROUP_STATS': int(INCLUDE_SKIPPED_GROUP_STATS),
-            'TEST_BLACKLISTED_METADATA_FIELDS': int(TEST_BLACKLISTED_METADATA_FIELDS),
-            'MAP_UNKNOWN': MAP_UNKNOWN
-        }
-
-        log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
+        self.config.log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
         # non permutation test lambda(TODO: lambda[s]?)
         lam_client.invoke(
             FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
@@ -217,7 +247,7 @@ class BioProjectInfo:
         )
 
         for i, job in enumerate(self.jobs):
-            log_print(f"dispatching lambda job {i + 1} for {self.name}")
+            self.config.log_print(f"dispatching lambda job {i + 1} for {self.name}")
             # Invoke the Lambda function
             lam_client.invoke(
                 FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
@@ -226,7 +256,7 @@ class BioProjectInfo:
                     'bioproject_info': bioproject_info,
                     'main_df_link': link,
                     'job_window': job,
-                    'id': i + 1,
+                    'id': str(i + 1),
                     'flags': flags
                 })
             )
@@ -241,40 +271,38 @@ class BioProjectInfo:
             with open('temp_file.pickle', 'rb') as f:
                 self.metadata_ref_lst = pickle.load(f)
                 self.metadata_df = pickle.load(f)
-                if len(self.metadata_ref_lst) != len(self.metadata_df):
-                    log_print("Warning: metadata ref list and metadata df are not the same length. Requires updating mwas metadata table")
+                if len(self.metadata_ref_lst) != self.n_biosamples:
+                    self.config.log_print("Warning: metadata ref list and metadata df are not the same length. Requires updating mwas metadata table")
                 self.n_biosamples = len(self.metadata_ref_lst)
             os.remove('temp_file.pickle')
         except Exception as e:
-            log_print(f"Error in loading metadata for {self.name}: {e}", 2)
+            self.config.log_print(f"Error in loading metadata for {self.name}: {e}", 2)
 
     def build_rpm_map(self, input_df: pd.DataFrame, groups_focus: dict | None) -> None:
         """Build the rpm map for this bioproject
         """
         if self.rpm_map is not None:  # if the rpm map has already been built
             return
-        # get subset of main_df that belongs to this bioproject
         # rpm map building
         time_build = time.time()
         groups = input_df['group'].unique()
-        global MAP_UNKNOWN
-        if not IMPLICIT_ZEROS:
-            MAP_UNKNOWN = -1  # to allow for user provided 0,
+        if not self.config.IMPLICIT_ZEROS:
+            self.config.MAP_UNKNOWN = -1  # to allow for user provided 0,
             # we must use a negative number to indicate unknown (user should never provide a negative number)
 
         # groups_rpm_map is a dictionary with keys as groups and values as a list of two items:
         # the rpm list for the group and a boolean - True => skip the group
-        groups_rpm_map = {group: [np.full(self.n_biosamples, MAP_UNKNOWN, float), False] for group in
-                          groups if groups in groups_focus or groups_focus is None}
+        groups_rpm_map = {group: [np.full(self.n_biosamples, self.config.MAP_UNKNOWN, float), False] for group in groups
+                          if group in groups_focus or groups_focus is None}
         # remember, numpy arrays work better with preallocation
 
         missing_biosamples = set()
-        for g in groups:
+        for g in groups_rpm_map.keys():
             group_subset = input_df[input_df['group'] == g]
-            if IMPLICIT_ZEROS:
-                if GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
+            if self.config.IMPLICIT_ZEROS:
+                if self.config.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD > 0:
                     num_provided = group_subset['quantifier'].count()
-                    if num_provided < GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
+                    if num_provided < self.config.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD:
                         groups_rpm_map[g][1] = True
             else:
                 num_provided = group_subset['quantifier'].count()
@@ -295,50 +323,50 @@ class BioProjectInfo:
 
                 # get mean of the quantifier for this biosample in this group and load that into the rpm map
                 if len(biosample_subset) > 1:
-                    if ALREADY_NORMALIZED:
+                    if self.config.ALREADY_NORMALIZED:
                         groups_rpm_map[g][0][i] = np.mean(reads.values)
                     else:
                         groups_rpm_map[g][0][i] = np.mean([reads.values[x] / (spots.values[x] * NORMALIZING_CONST)
-                                                           if spots.values[x] != 0 else MAP_UNKNOWN
+                                                           if spots.values[x] != 0 else self.config.MAP_UNKNOWN
                                                            for x in range(len(biosample_subset))])
                 else:
-                    if ALREADY_NORMALIZED:
+                    if self.config.ALREADY_NORMALIZED:
                         groups_rpm_map[g][0][i] = reads.values[0]
                     else:
                         groups_rpm_map[g][0][i] = reads.values[0] / spots.values[0] * NORMALIZING_CONST \
-                            if spots.values[0] != 0 else MAP_UNKNOWN
+                            if spots.values[0] != 0 else self.config.MAP_UNKNOWN
 
         del groups
         if missing_biosamples:  # this is an issue due to the raw csvs not having retrieved certain metadata from ncbi,
             # possibly because the metadata is outdated. Therefore, if this is found, the raw csvs must be remade and then condensed again
-            log_print(
+            self.config.log_print(
                 f"Not found in ref lst: {', '.join(missing_biosamples)} for {self.name} - "
                 f"this implies there was no mention of this biosample in the bioproject's metadata file, despite the biosample having "
                 f"been provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI",
                 2)
-        log_print(f"Built rpm map for {self.name} in {round(time.time() - time_build, 2)} seconds\n")
+        self.config.log_print(f"Built rpm map for {self.name} in {round(time.time() - time_build, 2)} seconds.")
 
-    def process_bioproject(self, subset_df: pd.DataFrame, id: int, job: tuple[dict[str, tuple[int, int]], int]) -> str | None:
+    def process_bioproject(self, subset_df: pd.DataFrame, job: tuple[dict[str, tuple[int, int]], int], id: int) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
         """
         time_start = time.time()
         identifier = f"B{id}/{self.num_lambda_jobs}"
-        log_print(f"RETRIEVING METADATA FOR {self.name}...")
+        self.config.log_print(f"RETRIEVING METADATA FOR {self.name}...")
         self.retrieve_metadata()
         if self.metadata_df.shape[0] < 4:
             # although no metadata should have 0 rows, since those would be condensed to an empty file
             # and then filtered out in metadata_retrieval, this is just a safety check
-            log_print(f"Skipping {self.name} since its metadata is empty or too small. "
+            self.config.log_print(f"Skipping {self.name} since its metadata is empty or too small. "
                       f"(Note: if you see this message, there is a discrepancy in the metadata files)")
             return None
-        log_print(f"BUILDING RPM MAP FOR {self.name}-{identifier}...")
+        self.config.log_print(f"BUILDING RPM MAP FOR {self.name}-{identifier}...")
         if self.rpm_map is None:
             if isinstance(job, str) and job == 'full':
                 group_focus = None
             else:
                 group_focus, _ = job
             self.build_rpm_map(subset_df, group_focus)
-        log_print(f"STARTING TESTS FOR {self.name}-{identifier}...\n")
+        self.config.log_print(f"STARTING TESTS FOR {self.name}-{identifier}...\n")
         if id == 0:  # t-test job
             result = self.process_bioproject_other()
         else:
@@ -347,7 +375,7 @@ class BioProjectInfo:
             else:
                 result = self.process_bioproject_perms(job[0], job[1])
 
-        log_print(f"FINISHED PROCESSING {self.name}-{identifier} in {round(time.time() - time_start, 3)} seconds\n")
+        self.config.log_print(f"FINISHED PROCESSING {self.name}-{identifier} in {round(time.time() - time_start, 3)} seconds\n")
         return result
 
     def get_test_stats(self, index_is_include, index_list, rpm_map, group_name, attributes, values) \
@@ -356,7 +384,7 @@ class BioProjectInfo:
         # could be optimized?
         true_rpm, false_rpm = [], []
         for i, rpm_val in enumerate(rpm_map):
-            if not IMPLICIT_ZEROS and rpm_val == MAP_UNKNOWN:
+            if not self.config.IMPLICIT_ZEROS and rpm_val == self.config.MAP_UNKNOWN:
                 continue
             if (i in index_list and index_is_include) or (i not in index_list and not index_is_include):
                 true_rpm.append(rpm_val)
@@ -366,7 +394,7 @@ class BioProjectInfo:
         num_true, num_false = len(true_rpm), len(false_rpm)
 
         if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
-            log_print(f'skipping {group_name} - {attributes}:{values} '
+            self.config.log_print(f'skipping {group_name} - {attributes}:{values} '
                       f'because num_true or num_false < 2', 2)
             return None
 
@@ -428,7 +456,7 @@ class BioProjectInfo:
             with Pool(processes=num_workers) as pool:
                 results = pool.starmap(run_ttests_for_group, [(shared_results, group) for group in self.groups])
 
-        log_print(f"Finished processing tests for {self.name}\n")
+        self.config.log_print(f"Finished processing tests for {self.name}\n")
 
         # convert the results to a string
         results_str = ''
@@ -436,33 +464,34 @@ class BioProjectInfo:
             results_str += results[group] + '\n'
         return results_str
 
-    def process_bioproject_perms(self, job_groups: dict | None, num_tests) -> str | None:
+    def process_bioproject_perms(self, job_groups: dict | None, num_tests: int) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
         """
+        self.config.log_print(f"Performing {num_tests} permutation tests for {self.name}...")
         tests = []
         test_id = 0
         if job_groups is not None:
             groups = job_groups.keys()
         else:
             groups = self.groups
-        for group in groups:
-            # get subset of metadata_df that are permutation tests and aren't blacklisted fields
-            self.metadata_df = self.metadata_df[self.metadata_df['test_type'] == 'permutation-test']
-            if not TEST_BLACKLISTED_METADATA_FIELDS:
-                self.metadata_df = self.metadata_df[self.metadata_df['skippable?'] == 0]
+        # filter the metadata_df to only include the permutation tests and the non-skippable tests
+        metadata_df = self.metadata_df[self.metadata_df['test_type'] == 'permutation-test']
+        if not self.config.TEST_BLACKLISTED_METADATA_FIELDS:
+            metadata_df = metadata_df[metadata_df['skippable?'] == 0]
 
-            if job_groups is not None:
+        for group in groups:
+            if job_groups is not None:  # TODO
                 start, end = job_groups[group]
-                sets_subset_df = self.metadata_df.iloc[start:end]
+                sets_subset_df = metadata_df.iloc[start:end]
             else:
-                sets_subset_df = self.metadata_df
+                sets_subset_df = metadata_df
 
             # add the tests to the tests list
             for _, row in sets_subset_df.iterrows():
                 tests.append({
                     'include': row['include?'],
                     'biosample_index_list': row['biosample_index_list'],
-                    'group_rpm_list': self.rpm_map[group],
+                    'group_rpm_list': self.rpm_map[group],  # TODO: fix this typeerror... TypeError: 'NoneType' object is not subscriptable
                     'group': group,
                     'attributes': row['attributes'],
                     'values': row['values'],
@@ -478,7 +507,7 @@ class BioProjectInfo:
             with Pool(processes=num_workers) as pool:
                 results = pool.starmap(self.process_set_test, [(shared_results, test, 'permutation_test', reusable_keys) for test in tests])
 
-        log_print(f"Finished processing tests for {self.name}\n")
+        self.config.log_print(f"Finished processing tests for {self.name}\n")
 
         # convert the results to a string
         results_str = ''
@@ -502,9 +531,9 @@ class BioProjectInfo:
         test_key = test_key + (group,)
         if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
             test_statistic, p_value, status = reusable_results[test_key]
-            log_print(f"Reusing results for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
+            self.config.log_print(f"Reusing results for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
         else:
-            log_print(f"Running {test_type} for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
+            self.config.log_print(f"Running {test_type} for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
             try:
                 if test_type == 't_test':
                     # T TEST
@@ -528,14 +557,14 @@ class BioProjectInfo:
                     p_value, test_statistic = res.pvalue, res.statistic
 
                 else:
-                    log_print(f"Error: unknown test type {test_type}", 2)
+                    self.config.log_print(f"Error: unknown test type {test_type}", 2)
                     return
                 reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
             except Exception as e:
-                log_print(f"Error running permutation test for {row['group']} - {row['attributes']}:{row['values']} - {e}", 2)
+                self.config.log_print(f"Error running permutation test for {row['group']} - {row['attributes']}:{row['values']} - {e}", 2)
                 return
 
-        if p_value < P_VALUE_THRESHOLD:
+        if p_value < self.config.P_VALUE_THRESHOLD:
             status += '; significant'
             too_many, threshold = 'too many biosamples to list', 200
             true_biosamples = '; '.join([self.metadata_ref_lst[i] for i in index_list]) \
@@ -546,10 +575,10 @@ class BioProjectInfo:
                 true_biosamples, false_biosamples = false_biosamples, true_biosamples
         else:
             true_biosamples, false_biosamples = '', ''
-        log_print(f"Finished with p-value: {p_value}", 2)
+        self.config.log_print(f"Finished with p-value: {p_value}", 2)
 
         test_end_time = time.time() - test_start_time
-        log_print(f"Test took {test_end_time} seconds", 2)
+        self.config.log_print(f"Test took {test_end_time} seconds", 2)
 
         # record the output
         this_result = (
@@ -557,32 +586,39 @@ class BioProjectInfo:
             f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},"
             f"{test_statistic},{p_value},{true_biosamples},{false_biosamples},{test_end_time}\n"
         )
-        log_print(this_result, 2)
+        self.config.log_print(this_result, 2)
         if row['test_id'] == -1:
             results += this_result
         else:
             results[row['test_id']] = this_result
 
 
-def update_progress(status, num_bioprojects, num_lambda_jobs, num_permutation_tests, num_jobs_completed, start_time, sync_s3=True) -> None:
-    """Update the progress file with the given progress dictionary"""
-    with open(f"{TEMP_LOCAL_BUCKET}/{PROGRESS_FILE}", 'w') as f:
-        json.dump({
-            'status': status,
-            'num_bioprojects': str(num_bioprojects),
-            'num_lambda_jobs': str(num_lambda_jobs),
-            'num_permutation_tests': str(num_permutation_tests),
-            'num_jobs_completed': str(num_jobs_completed),
-            'time_elapsed': str(time.time() - start_time)
-        }, f)
-    if sync_s3:
-        s3_sync()
+def load_bioproject_from_dict(config: Config, bioproject_dict: dict) -> BioProjectInfo:
+    """Load a bioproject from a dictionary"""
+    return BioProjectInfo(
+        config,
+        bioproject_dict['name'],
+        int(bioproject_dict['metadata_file_size']),
+        int(bioproject_dict['n_biosamples']),
+        int(bioproject_dict['n_sets']),
+        int(bioproject_dict['n_permutation_sets']),
+        int(bioproject_dict['n_skippable_permutation_sets']),
+        int(bioproject_dict['n_groups']),
+        int(bioproject_dict['n_skipped_groups']),
+        int(bioproject_dict['num_lambda_jobs']),
+        int(bioproject_dict['num_conc_procs']),
+        eval(bioproject_dict['groups'])
+    )
 
 
-def s3_sync():
-    """Sync the local s3 bucket with the s3 bucket"""
-    process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}", shell=True)
-    if process.returncode == 0:
-        log_print(f"Synced s3 bucket: {S3_OUTPUT_DIR}")
-    else:
-        log_print(f"Error in syncing s3 bucket: {S3_OUTPUT_DIR}", 0)
+def lambda_job_json(bioproject: BioProjectInfo, s3_dir: str, ttest_job: bool):
+    """only intended for testing purposes (get event without actiavting lambdas"""
+    bioproject_info = bioproject.to_json()
+    flags = bioproject.config.to_json()
+    return {
+        'bioproject_info': bioproject_info,
+        'main_df_link': f's3://serratus-biosamples/mwas_data/{s3_dir}/main_df.csv',
+        'job_window': 'full' if ttest_job else bioproject.jobs[0],
+        'id': 0 if ttest_job else 1,
+        'flags': flags
+    }
