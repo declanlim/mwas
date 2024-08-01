@@ -12,27 +12,7 @@ mem_before = memory_usage()
 
 # Import the module
 
-import math
-# built-in libraries
-import os
-import sys
-import platform
-import subprocess
-import pickle
-import time
-import tracemalloc
-import logging
-import json
-from atexit import register
-from shutil import rmtree
-from typing import Any
-
-import boto3
-# import required libraries
 import psycopg2
-import pandas as pd
-import numpy as np
-from scipy.stats import permutation_test, ttest_ind_from_stats
 
 # Measure memory usage after import
 mem_after = memory_usage()
