@@ -10,6 +10,7 @@ def lambda_handler(event: dict, context) -> dict:
     main_df_link = event['main_df_link']
     job_window = event['job_window']
     lam_id = event['id']
+    timeout = event['duration'] * 2
 
     CONFIG = Config()
     CONFIG.load_from_json(event['flags'])
@@ -46,13 +47,14 @@ def lambda_handler(event: dict, context) -> dict:
 
     # upload the result and log files to s3
     try:
-        command_cp = f"s5cmd cp -f result.txt {S3_OUTPUT_DIR}/{OUTPUT_FILES_DIR}/result_{bioproject.name}_job{lam_id}.txt"
+        this_runs_dir = main_df_link.split('/')[-2]  # get the s3 dir name from the link
+
+        command_cp = f"s5cmd cp -f result.txt {S3_OUTPUT_DIR}{this_runs_dir}/{OUTPUT_FILES_DIR}/result_{bioproject.name}_job{lam_id}.txt"
         subprocess.run(SHELL_PREFIX + command_cp, shell=True)
         os.remove('result.txt')
 
-        command_cp = f"s5cmd cp -f log_{bioproject.name}_job{lam_id}.txt {S3_OUTPUT_DIR}/{PROC_LOG_FILES_DIR}/log_{bioproject.name}_job{lam_id}.txt"
+        command_cp = f"s5cmd cp -f log_{bioproject.name}_job{lam_id}.txt {S3_OUTPUT_DIR}{this_runs_dir}/{PROC_LOG_FILES_DIR}/log_{bioproject.name}_job{lam_id}.txt"
         subprocess.run(SHELL_PREFIX + command_cp, shell=True)
-        os.remove(f"log_{bioproject.name}_job{lam_id}.txt")
 
     except Exception as e:
         CONFIG.log_print(f"Error in syncing output: {e}", 2)
@@ -75,9 +77,10 @@ if __name__ == '__main__':
                                  'num_conc_procs': '3',
                                  'groups': "['IFNA1', 'IFNA2', 'IFNL3', 'IFNL2', 'IFNL1', 'IFNG', 'IFNW1', 'IFNB1', 'IFNA21', 'IFNA17', 'IFNA16', 'IFNA14', 'IFNA13', 'IFNA10', "
                                            "'IFNA8', 'IFNA7', 'IFNA6', 'IFNA5', 'IFNA4', 'IFNL4']"},
-             'main_df_link': 's3://serratus-biosamples/mwas_data/Thu_Aug__1_16-11-15_2024/temp_main_df.pickle',
-             'job_window': ({'IFNA1': (188, 388), 'IFNA2': (0, 100)}, 300),
+             'main_df_link': 's3://serratus-biosamples/mwas_data/Tue_Aug__6_15-20-55_2024/temp_main_df.pickle',
+             'job_window': ({'IFNA1': (184, 384), 'IFNA2': (0, 100)}, 300),
              'id': 1,
+             'duration': 60,
              'flags': {'IMPLICIT_ZEROS': '0',
                        'GROUP_NONZEROS_ACCEPTANCE_THRESHOLD': '4',
                        'ALREADY_NORMALIZED': '0',

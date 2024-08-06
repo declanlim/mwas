@@ -344,6 +344,7 @@ class BioProjectInfo:
                 f"this implies there was no mention of this biosample in the bioproject's metadata file, despite the biosample having "
                 f"been provided by the user. Though, this doesn't necessarily mean it's there's no metadata for the biosample on NCBI",
                 2)
+        self.rpm_map = groups_rpm_map
         self.config.log_print(f"Built rpm map for {self.name} in {round(time.time() - time_build, 2)} seconds.")
 
     def process_bioproject(self, subset_df: pd.DataFrame, job: tuple[dict[str, tuple[int, int]], int], id: int) -> str | None:
@@ -357,7 +358,7 @@ class BioProjectInfo:
             # although no metadata should have 0 rows, since those would be condensed to an empty file
             # and then filtered out in metadata_retrieval, this is just a safety check
             self.config.log_print(f"Skipping {self.name} since its metadata is empty or too small. "
-                      f"(Note: if you see this message, there is a discrepancy in the metadata files)")
+                                  f"(Note: if you see this message, there is a discrepancy in the metadata files)")
             return None
         self.config.log_print(f"BUILDING RPM MAP FOR {self.name}-{identifier}...")
         if self.rpm_map is None:
@@ -395,7 +396,7 @@ class BioProjectInfo:
 
         if num_true < 2 or num_false < 2:  # this probably only might happen if IMPLIED_ZEROS is False
             self.config.log_print(f'skipping {group_name} - {attributes}:{values} '
-                      f'because num_true or num_false < 2', 2)
+                                  f'because num_true or num_false < 2', 2)
             return None
 
         # calculate desecriptive stats
@@ -461,7 +462,10 @@ class BioProjectInfo:
         # convert the results to a string
         results_str = ''
         for group in self.groups:
-            results_str += results[group] + '\n'
+            results_str += results[group]
+            # add a newline if it doesn't already have one at the end
+            if results_str and results_str[-1] != '\n':
+                results_str += '\n'
         return results_str
 
     def process_bioproject_perms(self, job_groups: dict | None, num_tests: int) -> str | None:
@@ -505,15 +509,12 @@ class BioProjectInfo:
             shared_results = manager.dict()  # Shared dictionary
             reusable_keys = manager.dict()
             with Pool(processes=num_workers) as pool:
-                results = pool.starmap(self.process_set_test, [(shared_results, test, 'permutation_test', reusable_keys) for test in tests])
-
-        self.config.log_print(f"Finished processing tests for {self.name}\n")
-
-        # convert the results to a string
-        results_str = ''
-        for result in results:
-            results_str += results[result] + '\n'
-        return results_str
+                pool.starmap(self.process_set_test, [(shared_results, test, 'permutation_test', reusable_keys) for test in tests])
+            self.config.log_print(f"Finished processing tests for {self.name}\n")
+            results_str = ''
+            for result in shared_results:
+                results_str += shared_results[result] + '\n'
+            return results_str
 
     def process_set_test(self, results: dict | str, row: dict, test_type: str, reusable_results: dict) -> None:
         """Process a single set of permutation tests
@@ -522,13 +523,13 @@ class BioProjectInfo:
         """
         test_start_time = time.time()
 
-        group, rpm_list = row['group'], row['group_rpm_list']
+        group, rpm_list = row['group'], row['group_rpm_list'][0]
         index_is_inlcude, index_list = row['include'], row['biosample_index_list']
-        test_key = self.get_test_stats(index_is_inlcude, index_list, rpm_list, group, row['attributes'], row['values'])
-        if test_key is None:
+        test_info = self.get_test_stats(index_is_inlcude, index_list, rpm_list, group, row['attributes'], row['values'])
+        if test_info is None:
             return
-        num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change = test_key
-        test_key = test_key + (group,)
+        num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change = test_info
+        test_key = num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, fold_change, group
         if test_key in reusable_results and (mean_rpm_false == 0 or mean_rpm_true == 0):
             test_statistic, p_value, status = reusable_results[test_key]
             self.config.log_print(f"Reusing results for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
@@ -545,7 +546,6 @@ class BioProjectInfo:
 
                 elif test_type == 'permutation_test':
                     # PERMUTATION TEST
-                    assert min(num_false, num_true) >= 4
                     status = 'permutation_test'
                     num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
 
@@ -617,7 +617,7 @@ def lambda_job_json(bioproject: BioProjectInfo, s3_dir: str, ttest_job: bool):
     flags = bioproject.config.to_json()
     return {
         'bioproject_info': bioproject_info,
-        'main_df_link': f's3://serratus-biosamples/mwas_data/{s3_dir}/main_df.csv',
+        'main_df_link': f's3://serratus-biosamples/mwas_data/{s3_dir}/temp_main_df.pickle',
         'job_window': 'full' if ttest_job else bioproject.jobs[0],
         'id': 0 if ttest_job else 1,
         'flags': flags
