@@ -4,7 +4,6 @@
 import math
 import os
 import platform
-import subprocess
 import pickle
 import time
 import logging
@@ -19,9 +18,14 @@ import numpy as np
 from scipy.stats import permutation_test, ttest_ind_from_stats
 
 
-# path constants
-S3_METADATA_DIR = 's3://serratus-biosamples/condensed-bioproject-metadata'
-S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'
+# s3 constants
+DIR_SUFFIX = ''  # '/tmp/' for deployment, '' for local testing
+S3_BUCKET_BOTO = 'serratus-biosamples'
+S3_METADATA_DIR_BOTO = 'condensed-bioproject-metadata'
+S3_OUTPUT_DIR_BOTO = 'mwas_data'
+MAIN_DF_PICKLE = 'temp_main_df.pickle'
+
+# file constants
 PROBLEMATIC_BIOPJS_FILE = 'bioprojects_ignored.txt'
 PREPROC_LOG_FILE = 'preprocessing_log.txt'
 PROGRESS_FILE = 'progress.json'
@@ -171,7 +175,7 @@ class BioProjectInfo:
             'n_skipped_groups': str(self.n_skipped_groups),
             'num_lambda_jobs': str(self.num_lambda_jobs),
             'num_conc_procs': str(self.num_conc_procs),
-            'groups': str([str(g) for g in self.groups]) if self.groups else 'all',
+            'groups': str([str(g) for g in self.groups]) if self.groups else 'everything',
         }
 
     def batch_lambda_jobs(self, main_df: pd.DataFrame, time_constraint: int) -> tuple[int, int]:
@@ -212,14 +216,16 @@ class BioProjectInfo:
                     left_off_at += 1  # record where we are
                     num_tests_added += 1  # update where we are in a group relative to the total tests
                     if num_tests_added % self.n_actual_permutation_sets == 0:  # finished adding tests for a group
-                        focus_groups[self.groups[curr_group]] = (started_at, left_off_at)
+                        focus_groups[self.groups[curr_group]] = [started_at, left_off_at]
                         curr_group += 1
                         started_at = left_off_at = 0
                 if left_off_at > 0:
-                    focus_groups[self.groups[curr_group]] = (started_at, left_off_at)
-                self.jobs.append((focus_groups, lambda_size))
+                    focus_groups[self.groups[curr_group]] = [started_at, left_off_at]
+                self.jobs.append(focus_groups)
         elif self.num_lambda_jobs == 1:
             self.jobs.append('full')
+
+        # TODO: estimate time of 'full' jobs, and bunch them together with their t-test lambdas if there's enough time left
 
         assert self.num_lambda_jobs == len(self.jobs)
         return self.n_actual_permutation_sets, self.num_lambda_jobs
@@ -239,14 +245,14 @@ class BioProjectInfo:
             InvocationType='Event',  # Asynchronous invocation
             Payload=json.dumps({
                 'bioproject_info': bioproject_info,
-                'main_df_link': link,
+                'link': link,
                 'job_window': 'full',  # empty implies all groups
                 'id': 0,  # 0 implies this is the non-perm tests lambda
                 'flags': flags
             })
         )
 
-        for i, job in enumerate(self.jobs):
+        for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
             self.config.log_print(f"dispatching lambda job {i + 1} for {self.name}")
             # Invoke the Lambda function
             lam_client.invoke(
@@ -254,7 +260,7 @@ class BioProjectInfo:
                 InvocationType='Event',  # Asynchronous invocation
                 Payload=json.dumps({
                     'bioproject_info': bioproject_info,
-                    'main_df_link': link,
+                    'link': link,
                     'job_window': job,
                     'id': str(i + 1),
                     'flags': flags
@@ -266,15 +272,15 @@ class BioProjectInfo:
         Note: we should only use this if we're currently working with the bioproject
         """
         try:
-            command_cp = f"s5cmd cp -f {S3_METADATA_DIR}/{self.name}.mwaspkl temp_file.pickle"
-            subprocess.run(SHELL_PREFIX + command_cp, shell=True)
-            with open('temp_file.pickle', 'rb') as f:
+            s3 = boto3.client('s3')
+            s3.download_file(S3_BUCKET_BOTO, f"{S3_METADATA_DIR_BOTO}/{self.name}.mwaspkl", DIR_SUFFIX + 'temp_file.pickle')
+            with open(DIR_SUFFIX + 'temp_file.pickle', 'rb') as f:
                 self.metadata_ref_lst = pickle.load(f)
                 self.metadata_df = pickle.load(f)
                 if len(self.metadata_ref_lst) != self.n_biosamples:
                     self.config.log_print("Warning: metadata ref list and metadata df are not the same length. Requires updating mwas metadata table")
                 self.n_biosamples = len(self.metadata_ref_lst)
-            os.remove('temp_file.pickle')
+            os.remove(DIR_SUFFIX + 'temp_file.pickle')
         except Exception as e:
             self.config.log_print(f"Error in loading metadata for {self.name}: {e}", 2)
 
@@ -293,7 +299,9 @@ class BioProjectInfo:
         # groups_rpm_map is a dictionary with keys as groups and values as a list of two items:
         # the rpm list for the group and a boolean - True => skip the group
         groups_rpm_map = {group: [np.full(self.n_biosamples, self.config.MAP_UNKNOWN, float), False] for group in groups
-                          if group in groups_focus or groups_focus is None}
+                          if groups_focus is None or group in groups_focus}
+        if self.groups == 'everything':
+            self.groups = groups
         # remember, numpy arrays work better with preallocation
 
         missing_biosamples = set()
@@ -347,7 +355,7 @@ class BioProjectInfo:
         self.rpm_map = groups_rpm_map
         self.config.log_print(f"Built rpm map for {self.name} in {round(time.time() - time_build, 2)} seconds.")
 
-    def process_bioproject(self, subset_df: pd.DataFrame, job: tuple[dict[str, tuple[int, int]], int], id: int) -> str | None:
+    def process_bioproject(self, subset_df: pd.DataFrame, job: dict[str, list[int, int]], id: int) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
         """
         time_start = time.time()
@@ -365,7 +373,7 @@ class BioProjectInfo:
             if isinstance(job, str) and job == 'full':
                 group_focus = None
             else:
-                group_focus, _ = job
+                group_focus = job
             self.build_rpm_map(subset_df, group_focus)
         self.config.log_print(f"STARTING TESTS FOR {self.name}-{identifier}...\n")
         if id == 0:  # t-test job
@@ -374,13 +382,14 @@ class BioProjectInfo:
             if isinstance(job, str):
                 result = self.process_bioproject_perms(None, self.n_actual_permutation_sets)
             else:
-                result = self.process_bioproject_perms(job[0], job[1])
+                num_tests = sum([job[g][1] - job[g][0] for g in job])
+                result = self.process_bioproject_perms(job, num_tests)
 
         self.config.log_print(f"FINISHED PROCESSING {self.name}-{identifier} in {round(time.time() - time_start, 3)} seconds\n")
         return result
 
     def get_test_stats(self, index_is_include, index_list, rpm_map, group_name, attributes, values) \
-            -> tuple[float, float, float, float, float, float, list, list, Any] | None:
+            -> tuple[int, int, float, float, float, float, list, list, Any] | None:
         """get the test stats for the given group"""
         # could be optimized?
         true_rpm, false_rpm = [], []
@@ -428,45 +437,53 @@ class BioProjectInfo:
 
         return num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change
 
+    def run_ttests_for_group(self, shared_results, group):
+        """function to be ran in parallel (groups are run in parallel, within a group is in series)"""
+        reusable_results = {}
+        results = ''
+        for _, row in self.metadata_df.iterrows():
+            if row['test_type'] == 't-test' and (not self.config.TEST_BLACKLISTED_METADATA_FIELDS or row['skippable?'] == 0):
+                new_row = {
+                    'include': row['include?'],
+                    'biosample_index_list': row['biosample_index_list'],
+                    'group_rpm_list': self.rpm_map[group],
+                    'group': group,
+                    'attributes': row['attributes'],
+                    'values': row['values'],
+                    'test_id': -1
+                }
+                result = self.process_set_test(results, new_row, 't-test', reusable_results)
+                if result is not None:
+                    results += result
+        shared_results[group] = results
+        return results
+
     def process_bioproject_other(self) -> str | None:
         """Process the given group, and return an output file
-            """
+        """
+        est_time = (self.n_sets - self.n_actual_permutation_sets) * 0.0003 * (self.n_groups - self.n_skipped_groups)  # TODO: replace 0.0001 with actual t-test time constant
+        time_limit = 60
+        if est_time <= time_limit:
+            shared_results = {}
+            for group in self.groups:
+                self.config.log_print(f"Running tests for {group} in {self.name}")
+                self.run_ttests_for_group(shared_results, group)
+            results_str = ''
+            for group in shared_results:
+                results_str += shared_results[group]
+            return results_str
 
-        def run_ttests_for_group(shared_results, group):
-            """function to be ran in parallel (groups are run in parallel, within a group is in series)"""
-            reusable_results = {}
-            results = ''
-            for _, row in self.metadata_df.iterrows():
-                if row['test_type'] == 't_test':
-                    new_row = {
-                        'include': row['include?'],
-                        'biosample_index_list': row['biosample_index_list'],
-                        'group_rpm_list': self.rpm_map[group],
-                        'group': group,
-                        'attributes': row['attributes'],
-                        'values': row['values'],
-                        'test_id': -1
-                    }
-                    self.process_set_test(results, new_row, 't_test', reusable_results)
-            shared_results[group] = results
-            return results
-
-        num_workers = cpu_count()
-        with Manager() as manager:
-            shared_results = manager.dict()
-            with Pool(processes=num_workers) as pool:
-                results = pool.starmap(run_ttests_for_group, [(shared_results, group) for group in self.groups])
-
-        self.config.log_print(f"Finished processing tests for {self.name}\n")
-
-        # convert the results to a string
-        results_str = ''
-        for group in self.groups:
-            results_str += results[group]
-            # add a newline if it doesn't already have one at the end
-            if results_str and results_str[-1] != '\n':
-                results_str += '\n'
-        return results_str
+        else:
+            num_workers = cpu_count()
+            with Manager() as manager:
+                shared_results = manager.dict()
+                with Pool(processes=num_workers) as pool:
+                    pool.starmap(self.run_ttests_for_group, [(shared_results, group) for group in self.groups])
+                self.config.log_print(f"Finished processing tests for {self.name}\n")
+                results_str = ''
+                for group in shared_results:
+                    results_str += shared_results[group]
+                return results_str
 
     def process_bioproject_perms(self, job_groups: dict | None, num_tests: int) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
@@ -477,7 +494,7 @@ class BioProjectInfo:
         if job_groups is not None:
             groups = job_groups.keys()
         else:
-            groups = self.groups
+            groups = self.groups  # note: was set from 'everything' to actual list in build_rpm
         # filter the metadata_df to only include the permutation tests and the non-skippable tests
         metadata_df = self.metadata_df[self.metadata_df['test_type'] == 'permutation-test']
         if not self.config.TEST_BLACKLISTED_METADATA_FIELDS:
@@ -509,14 +526,14 @@ class BioProjectInfo:
             shared_results = manager.dict()  # Shared dictionary
             reusable_keys = manager.dict()
             with Pool(processes=num_workers) as pool:
-                pool.starmap(self.process_set_test, [(shared_results, test, 'permutation_test', reusable_keys) for test in tests])
+                pool.starmap(self.process_set_test, [(shared_results, test, 'permutation-test', reusable_keys) for test in tests])
             self.config.log_print(f"Finished processing tests for {self.name}\n")
             results_str = ''
             for result in shared_results:
-                results_str += shared_results[result] + '\n'
+                results_str += shared_results[result]
             return results_str
 
-    def process_set_test(self, results: dict | str, row: dict, test_type: str, reusable_results: dict) -> None:
+    def process_set_test(self, results: dict | str, row: dict, test_type: str, reusable_results: dict) -> None | str:
         """Process a single set of permutation tests
         if test_type is t_test then results is a string,
         if test_type is permutation_test then results is a dictionary
@@ -536,17 +553,17 @@ class BioProjectInfo:
         else:
             self.config.log_print(f"Running {test_type} for bioproject: {self.name}, group: {group}, set: {row['attributes']}:{row['values']}", 2)
             try:
-                if test_type == 't_test':
+                if test_type == 't-test':
                     # T TEST
                     assert min(num_false, num_true) < 4
-                    status = 't_test'
+                    status = 't-test'
                     test_statistic, p_value = ttest_ind_from_stats(mean1=mean_rpm_true, std1=sd_rpm_true, nobs1=num_true, mean2=mean_rpm_false, std2=sd_rpm_false, nobs2=num_false,
                                                                    equal_var=False)
-                    reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
+                    reusable_results[test_key] = (test_statistic, p_value, status)
 
-                elif test_type == 'permutation_test':
+                elif test_type == 'permutation-test':
                     # PERMUTATION TEST
-                    status = 'permutation_test'
+                    status = 'permutation-test'
                     num_samples = 10000  # note, we do not need to lower this to be precise (using n choose k) since scipy does this for us anyway
 
                     def mean_diff_statistic(x, y, axis):
@@ -559,7 +576,7 @@ class BioProjectInfo:
                 else:
                     self.config.log_print(f"Error: unknown test type {test_type}", 2)
                     return
-                reusable_results[test_key] = (fold_change, test_statistic, p_value, status)
+                reusable_results[test_key] = (test_statistic, p_value, status)
             except Exception as e:
                 self.config.log_print(f"Error running permutation test for {row['group']} - {row['attributes']}:{row['values']} - {e}", 2)
                 return
@@ -588,13 +605,14 @@ class BioProjectInfo:
         )
         self.config.log_print(this_result, 2)
         if row['test_id'] == -1:
-            results += this_result
+            return this_result
         else:
             results[row['test_id']] = this_result
 
 
 def load_bioproject_from_dict(config: Config, bioproject_dict: dict) -> BioProjectInfo:
     """Load a bioproject from a dictionary"""
+    groups_str = bioproject_dict['groups']
     return BioProjectInfo(
         config,
         bioproject_dict['name'],
@@ -607,7 +625,7 @@ def load_bioproject_from_dict(config: Config, bioproject_dict: dict) -> BioProje
         int(bioproject_dict['n_skipped_groups']),
         int(bioproject_dict['num_lambda_jobs']),
         int(bioproject_dict['num_conc_procs']),
-        eval(bioproject_dict['groups'])
+        groups_str if not groups_str[0] == '[' and not groups_str[-1] == ']' else eval(groups_str)
     )
 
 
@@ -617,7 +635,7 @@ def lambda_job_json(bioproject: BioProjectInfo, s3_dir: str, ttest_job: bool):
     flags = bioproject.config.to_json()
     return {
         'bioproject_info': bioproject_info,
-        'main_df_link': f's3://serratus-biosamples/mwas_data/{s3_dir}/temp_main_df.pickle',
+        'link': s3_dir,
         'job_window': 'full' if ttest_job else bioproject.jobs[0],
         'id': 0 if ttest_job else 1,
         'flags': flags

@@ -3,10 +3,13 @@ import sys
 import psycopg2
 from shutil import rmtree
 from mwas_functions import *
+import subprocess
 
 # globals
 DATE = time.asctime().replace(' ', '_').replace(':', '-')
 TEMP_LOCAL_BUCKET = None  # tbd when hash code is provided
+S3_METADATA_DIR = 's3://serratus-biosamples/condensed-bioproject-metadata'
+S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'
 CONFIG = Config()
 
 # sql constants
@@ -86,6 +89,38 @@ def s3_sync():
         CONFIG.log_print(f"Error in syncing s3 bucket: {S3_OUTPUT_DIR}", 0)
 
 
+def concat_s3_results(s3_dir: str) -> None:
+    """Concatenate all the results in the s3 bucket outputs directory into a single csv file
+
+    NOTE: this should be moved to a new lambda, and shouldn't be in preproc code (this file)
+    """
+    # create a local dir to store the results
+    results_dir = f"{TEMP_LOCAL_BUCKET}/{OUTPUT_FILES_DIR}"
+    os.mkdir(results_dir)
+
+    process = subprocess.run(SHELL_PREFIX + f"s5cmd cp -r {S3_OUTPUT_DIR} {results_dir}", shell=True)
+    if process.returncode == 0:
+        CONFIG.log_print(f"Successfully copied s3 bucket: {S3_OUTPUT_DIR}")
+    else:
+        CONFIG.log_print(f"Error in copying s3 bucket: {S3_OUTPUT_DIR}", 0)
+        return
+
+    # concatenate all the result files into a single csv file
+    with open(f"{TEMP_LOCAL_BUCKET}/{OUTPUT_CSV_FILE}", 'w') as final_output:
+        final_output.write(','.join(OUT_COLS) + ',job_id\n')  # write the header
+        for file in os.listdir(results_dir):  # for each file in the results directory
+            if file.endswith('.txt'):
+                with open(f"{results_dir}/{file}", 'r') as result_file:
+                    # get lines from the file
+                    lines = result_file.readlines()
+                    for line in lines:
+                        # filter blank lines
+                        if ',' in line:  # lines with commas are the ones we want since they have csv data
+                            final_output.write(line)
+    rmtree(results_dir)
+    CONFIG.log_print(f"Concatenated all results into {OUTPUT_CSV_FILE}")
+
+
 def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd.DataFrame | None:
     """Get the data from the given table using the given query with the given accessions
     """
@@ -107,7 +142,7 @@ def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd
             return None
 
 
-def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int, int] | None:
+def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) -> tuple[int, int, int] | None:
     """Run MWAS on the given data file
     input_info is a tuple of the group and quantifier column names
     storage will usually be the tmpfs mount point mount_tmpfs
@@ -207,10 +242,10 @@ def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int,
 
     CONFIG.log_print(f"preprocessing time: {time.time() - prep_start_time}", 1)
 
-    # pickle the main_df and store it in the bioproject's s3 dir
-    main_df.to_pickle(f'{TEMP_LOCAL_BUCKET}/temp_main_df.pickle')
-    main_df_s3_link = f"{S3_OUTPUT_DIR}temp_main_df.pickle"
+    # pickle the main_df
+    main_df.to_pickle(f'{TEMP_LOCAL_BUCKET}/{MAIN_DF_PICKLE}')
 
+    # this will sync the main_df file to the s3 dir
     update_progress('Dispatching Lambdas', num_bioprojects, total_lambda_jobs, total_perm_tests, 0, start_time)
     del biopj_info_df, main_df
 
@@ -222,7 +257,7 @@ def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int,
     LAMBDA_CLIENT = boto3.client('lambda')
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.dispatch_all_lambda_jobs(main_df_s3_link, LAMBDA_CLIENT)
+        bioproject_obj.dispatch_all_lambda_jobs(hash_dest, LAMBDA_CLIENT)
         del bioproject_obj
 
     return num_bioprojects, total_lambda_jobs, total_perm_tests
@@ -287,13 +322,13 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
 
         if '--already-normalized' in args:  # TODO: test
             CONFIG.ALREADY_NORMALIZED = 1
-        if '--p-value-threshold' in args:  # TODO: test
+        if '--p-value-threshold' in args:
             try:
                 CONFIG.P_VALUE_THRESHOLD = float(args[args.index('--p-value-threshold') + 1])
             except Exception as e:
                 CONFIG.log_print(f"Error in setting p-value threshold: {e}", 0)
                 return 1
-        if '--group-nonzero-threshold' in args:  # TODO: test
+        if '--group-nonzero-threshold' in args:
             try:
                 CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(args[args.index('--group-nonzero-threshold') + 1])
             except Exception as e:
@@ -333,7 +368,7 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
 
         # RUN MWAS
         CONFIG.log_print("RUNNING MWAS...", 0)
-        num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start)
+        num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start, hash_dest)
         CONFIG.log_print(f"Time taken: {time.time() - time_start} minutes", 0)
 
         # create header for output file
