@@ -10,7 +10,7 @@ import logging
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
-from multiprocessing import cpu_count
+from multiprocessing import Process, Pipe, cpu_count
 
 # import required libraries
 import boto3
@@ -83,7 +83,6 @@ class Config:
     P_VALUE_THRESHOLD = 0.005
     INCLUDE_SKIPPED_GROUP_STATS = 0  # if True, then the output will include the stats of the skipped tests
     TEST_BLACKLISTED_METADATA_FIELDS = 0  # if False, then the metadata fields in BLACKLISTED_METADATA_FIELDS will be ignored
-    PARALLELIZE = 1
 
     def to_json(self) -> dict:
         """Convert the configuration settings to a dictionary
@@ -439,7 +438,7 @@ class BioProjectInfo:
 
         return num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change
 
-    def run_ttests_for_group(self, group):
+    def run_ttests_for_group(self, group, conn=None):
         """function to be run in parallel (groups are run in parallel, within a group is in series)"""
         reusable_results = {}
         results = ''
@@ -457,7 +456,11 @@ class BioProjectInfo:
                 result = self.process_set_test(new_row, 't-test', reusable_results)
                 if result is not None:
                     results += result
-        return results
+        if conn is not None:
+            conn.send(results)
+            conn.close()
+        else:
+            return results
 
     def process_bioproject_other(self) -> str | None:
         """Process the given group, and return an output file
@@ -474,23 +477,43 @@ class BioProjectInfo:
         else:
             num_workers = cpu_count()
             results = ''
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(self.run_ttests_for_group, group) for group in self.groups]
-                for future in as_completed(futures):
-                    results += future.result()
+            num_instances = len(self.groups)
+            groups_index = 0
+            for batch in range(0, num_instances, num_workers):
+                processes, parent_connections = [], []
+                if num_instances - batch < num_workers:
+                    num_workers = num_instances - batch
+                for i in range(num_workers):
+                    try:
+                        group = self.groups[groups_index]
+                    except IndexError:
+                        break
+
+                    parent_conn, child_conn = Pipe()
+                    parent_connections.append(parent_conn)
+                    p = Process(target=self.run_ttests_for_group, args=(group, child_conn))
+                    processes.append((p, parent_conn))
+
+                    groups_index += 1
+
+                for p, conn in processes:
+                    p.start()
+                for p, conn in processes:
+                    p.join()
+                for parent in parent_connections:
+                    results += str(parent.recv())
             self.config.log_print(f"Finished processing tests for {self.name}\n")
             return results
 
-    def permu_batch(self, tests):
+    def permu_batch(self, tests, conn):
         """batches to be parallelized for permutation test mode
         """
         results_str = ''
         reusable_keys = {}
         for test in tests:
-            result = self.process_set_test(test, 'permutation-test', reusable_keys)
-            if result is not None:
-                results_str += result
-        return results_str
+            results_str += self.process_set_test(test, 'permutation-test', reusable_keys)
+        conn.send(results_str)
+        conn.close()
 
     def process_bioproject_perms(self, job_groups: dict | None, num_tests: int) -> str | None:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
@@ -529,20 +552,26 @@ class BioProjectInfo:
         del self.metadata_df
 
         results = ''
-        if self.config.PARALLELIZE:
-            num_workers = min(cpu_count(), self.num_conc_procs)
-            num_instances = len(tests)
-            instance_range = num_instances // num_workers
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(self.permu_batch, tests[i * instance_range: min((i + 1) * instance_range, num_instances)])
-                           for i in range(num_workers)]
-                for future in as_completed(futures):
-                    results += future.result()
-        else:
-            results = self.permu_batch(tests)
+        num_workers = min(cpu_count(), self.num_conc_procs)
+        num_instances = len(tests)
+        instance_range = num_instances // num_workers
+        processes, parent_connections = [], []
+        for i in range(num_workers):
+            parent_conn, child_conn = Pipe()
+            parent_connections.append(parent_conn)
+            start, end = i * instance_range, min(i + 1 * instance_range, num_instances)
+            p = Process(target=self.permu_batch, args=(tests[start:end], child_conn))
+            processes.append((p, parent_conn))
+
+        for p, conn in processes:
+            p.start()
+            print('started process ', p)
+        for p, conn in processes:
+            p.join()
+
+        for parent in parent_connections:
+            results += str(parent.recv())
         self.config.log_print(f"Finished processing tests for {self.name}\n")
-
-
         return results
 
     def process_set_test(self, row: dict, test_type: str, reusable_results: dict) -> None | str:
