@@ -8,9 +8,9 @@ import pickle
 import time
 import logging
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Process
+from threading import Lock
 
 # import required libraries
 import boto3
@@ -84,6 +84,9 @@ class Config:
     INCLUDE_SKIPPED_GROUP_STATS = 0  # if True, then the output will include the stats of the skipped tests
     TEST_BLACKLISTED_METADATA_FIELDS = 0  # if False, then the metadata fields in BLACKLISTED_METADATA_FIELDS will be ignored
     PARALLELIZE = 1
+    FILE_LOCK = Lock()
+    OUT_FILE = None
+    TIME_LIMIT = 30
 
     def to_json(self) -> dict:
         """Convert the configuration settings to a dictionary
@@ -109,6 +112,8 @@ class Config:
         self.TEST_BLACKLISTED_METADATA_FIELDS = int(config_dict['TEST_BLACKLISTED_METADATA_FIELDS'])
         self.LOGGING_LEVEL = int(config_dict['LOGGING_LEVEL'])
         self.USE_LOGGER = int(config_dict['USE_LOGGER'])
+        if 'TIME_LIMIT' in config_dict:
+            self.TIME_LIMIT = float(config_dict['TIME_LIMIT'])
 
     def log_print(self, msg: Any, lvl: int = 1) -> None:
         """Print a message if the logging level is appropriate"""
@@ -201,10 +206,21 @@ class BioProjectInfo:
 
         self.jobs = []
         if self.num_lambda_jobs > 1:
-
+            # remove the groups that have too few nonzeros or are only zeros (leave this in this if block to speed up preprocessing significantly)
             subset_df = main_df[main_df['bio_project'] == self.name]
             group_counts = subset_df['group'].value_counts()
             self.groups = group_counts[group_counts >= self.config.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD].index.tolist()
+            for group in subset_df['group'].unique():
+                group_subset = subset_df[subset_df['group'] == group]
+                all_zeros = not bool(group_subset['quantifier'].sum())
+                if all_zeros:
+                    self.n_skipped_groups += 1
+                    total_tests -= self.n_actual_permutation_sets
+                    self.groups.remove(group)
+            self.num_lambda_jobs = math.ceil(total_tests / lambda_area)
+            if self.num_lambda_jobs < 2:
+                self.jobs.append('full')
+                return self.n_actual_permutation_sets, self.num_lambda_jobs
 
             num_tests_added = curr_group = left_off_at = 0
             for i in range(0, total_tests, lambda_area):
@@ -243,7 +259,7 @@ class BioProjectInfo:
         self.config.log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
         # non permutation test lambda(TODO: lambda[s]?)
         lam_client.invoke(
-            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
+            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',   # TODO: specify alias (e.g. mwas:900MBmem)
             InvocationType='Event',  # Asynchronous invocation
             Payload=json.dumps({
                 'bioproject_info': bioproject_info,
@@ -357,7 +373,7 @@ class BioProjectInfo:
         self.rpm_map = groups_rpm_map
         self.config.log_print(f"Built rpm map for {self.name} in {round(time.time() - time_build, 2)} seconds.")
 
-    def process_bioproject(self, subset_df: pd.DataFrame, job: dict[str, list[int, int]], id: int) -> str | None:
+    def process_bioproject(self, subset_df: pd.DataFrame, job: dict[str, list[int, int]], id: int) -> bool:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
         """
         time_start = time.time()
@@ -369,7 +385,7 @@ class BioProjectInfo:
             # and then filtered out in metadata_retrieval, this is just a safety check
             self.config.log_print(f"Skipping {self.name} since its metadata is empty or too small. "
                                   f"(Note: if you see this message, there is a discrepancy in the metadata files)")
-            return None
+            return False
         self.config.log_print(f"BUILDING RPM MAP FOR {self.name}-{identifier}...")
         if self.rpm_map is None:
             if isinstance(job, str) and job == 'full':
@@ -439,47 +455,62 @@ class BioProjectInfo:
 
         return num_true, num_false, mean_rpm_true, mean_rpm_false, sd_rpm_true, sd_rpm_false, true_rpm, false_rpm, fold_change
 
-    def run_ttests_for_group(self, group):
+    def run_ttests_for_groups(self, groups: list[str]) -> None:
         """function to be run in parallel (groups are run in parallel, within a group is in series)"""
         reusable_results = {}
         results = ''
-        for _, row in self.metadata_df.iterrows():
-            if row['test_type'] == 't-test' and (not self.config.TEST_BLACKLISTED_METADATA_FIELDS or row['skippable?'] == 0):
-                new_row = {
-                    'include': row['include?'],
-                    'biosample_index_list': row['biosample_index_list'],
-                    'group_rpm_list': self.rpm_map[group],
-                    'group': group,
-                    'attributes': row['attributes'],
-                    'values': row['values'],
-                    'test_id': -1
-                }
-                result = self.process_set_test(new_row, 't-test', reusable_results)
-                if result is not None:
-                    results += result
-        return results
+        for group in groups:
+            if max(self.rpm_map[group][0]) == 0:  # then this should have been filtered out in preproc, but probably wasn't because it was in a single lambda job
+                self.config.log_print(f"skipping {group} because it has no nonzero reads", 2)
+                continue
 
-    def process_bioproject_other(self) -> str | None:
+            for _, row in self.metadata_df.iterrows():
+                if row['test_type'] == 't-test' and (not self.config.TEST_BLACKLISTED_METADATA_FIELDS or row['skippable?'] == 0):
+                    new_row = {
+                        'include': row['include?'],
+                        'biosample_index_list': row['biosample_index_list'],
+                        'group_rpm_list': self.rpm_map[group],
+                        'group': group,
+                        'attributes': row['attributes'],
+                        'values': row['values'],
+                        'test_id': -1
+                    }
+                    result = self.process_set_test(new_row, 't-test', reusable_results)
+                    if result is not None:
+                        results += result
+        self.write_results_to_file(results)
+
+    def process_bioproject_other(self) -> bool:
         """Process the given group, and return an output file
         """
         est_time = (self.n_sets - self.n_actual_permutation_sets) * 0.0001 * (self.n_groups - self.n_skipped_groups)  # TODO: replace 0.0001 with actual t-test time constant
-        time_limit = 60
-        if est_time <= time_limit:
-            results_str = ''
-            for group in self.groups:
-                self.config.log_print(f"Running tests for {group} in {self.name}")
-                results_str += self.run_ttests_for_group(group)
-            return results_str
-
-        else:
-            num_workers = cpu_count()
-            results = ''
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(self.run_ttests_for_group, group) for group in self.groups]
-                for future in as_completed(futures):
-                    results += future.result()
+        try:
+            if est_time <= self.config.TIME_LIMIT:
+                self.run_ttests_for_groups(self.groups)
+            else:
+                num_workers = cpu_count()
+                workers = {}
+                num_instances = len(self.groups)
+                instance_range = num_instances // num_workers
+                for i in range(num_workers):
+                    batch = self.groups[i * instance_range: min((i + 1) * instance_range, num_instances)]
+                    workers[i] = Process(target=self.run_ttests_for_groups, args=(batch,))
+                    workers[i].start()
+                for i in range(num_workers):
+                    workers[i].join()
             self.config.log_print(f"Finished processing tests for {self.name}\n")
-            return results
+        except Exception as e:
+            self.config.log_print(f"Error in processing bioproject {self.name}: {e}", 2)
+            return False
+        self.config.log_print(f"estimated time: {est_time}, time limit: {self.config.TIME_LIMIT}")
+        return True
+
+    def write_results_to_file(self, results: str) -> None:
+        """Write the results to a file"""
+        file_lock = self.config.FILE_LOCK
+        with file_lock:
+            with open(self.config.OUT_FILE, 'a') as f:
+                f.write(results)
 
     def permu_batch(self, tests):
         """batches to be parallelized for permutation test mode
@@ -487,12 +518,13 @@ class BioProjectInfo:
         results_str = ''
         reusable_keys = {}
         for test in tests:
+            print(test)
             result = self.process_set_test(test, 'permutation-test', reusable_keys)
             if result is not None:
                 results_str += result
-        return results_str
+        self.write_results_to_file(results_str)
 
-    def process_bioproject_perms(self, job_groups: dict | None, num_tests: int) -> str | None:
+    def process_bioproject_perms(self, job_groups: dict | None, num_tests: int) -> bool:
         """Process the given bioproject, and return an output file - concatenation of several group outputs
         """
         self.config.log_print(f"Performing {num_tests} permutation tests for {self.name}...")
@@ -508,9 +540,12 @@ class BioProjectInfo:
             metadata_df = metadata_df[metadata_df['skippable?'] == 0]
 
         for group in groups:
-            if job_groups is not None:  # TODO
+            if max(self.rpm_map[group][0]) == 0:  # then this should have been filtered out in preproc, but probably wasn't because it was in a single lambda job
+                self.config.log_print(f"skipping {group} because it has no nonzero reads", 2)
+                continue
+            if job_groups is not None:
                 start, end = job_groups[group]
-                sets_subset_df = metadata_df.iloc[start:end]
+                sets_subset_df = metadata_df.iloc[start:end]  # note: this is correct. Checking correctness via the metadata csv will show it's off by 2 - that's due to indexing from 1 in csv, and counting the header
             else:
                 sets_subset_df = metadata_df
 
@@ -527,23 +562,29 @@ class BioProjectInfo:
                 })
                 test_id += 1
         del self.metadata_df
-
-        results = ''
-        if self.config.PARALLELIZE:
+        num_tests = len(tests)
+        try:
             num_workers = min(cpu_count(), self.num_conc_procs)
-            num_instances = len(tests)
-            instance_range = num_instances // num_workers
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(self.permu_batch, tests[i * instance_range: min((i + 1) * instance_range, num_instances)])
-                           for i in range(num_workers)]
-                for future in as_completed(futures):
-                    results += future.result()
-        else:
-            results = self.permu_batch(tests)
-        self.config.log_print(f"Finished processing tests for {self.name}\n")
-
-
-        return results
+            series_time = 0.0004 * self.n_biosamples * num_tests
+            if self.config.PARALLELIZE and num_workers > 1 and series_time > self.config.TIME_LIMIT:
+                workers = {}
+                num_instances = len(tests)
+                instance_range = num_instances // num_workers
+                for i in range(num_workers):
+                    batch = tests[i * instance_range: min((i + 1) * instance_range, num_instances)]
+                    workers[i] = Process(target=self.permu_batch, args=(batch,))
+                    workers[i].start()
+                for i in range(num_workers):
+                    workers[i].join()
+            else:
+                self.config.log_print(f"running tests in series {'because it is small enough for time limit' if series_time >= self.config.TIME_LIMIT else ''}")
+                self.permu_batch(tests)
+            self.config.log_print(f"Finished processing tests for {self.name}\n")
+            self.config.log_print(f"estimated series time: {series_time}, time limit: {self.config.TIME_LIMIT}")
+        except Exception as e:
+            self.config.log_print(f"Error in processing bioproject {self.name}: {e}", 2)
+            return False
+        return True
 
     def process_set_test(self, row: dict, test_type: str, reusable_results: dict) -> None | str:
         """Process a single set of permutation tests

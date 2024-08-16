@@ -26,7 +26,7 @@ LOGAN_CONNECTION_INFO = {
     'password': 'serratus'
 }
 META_QUERY = """
-    SELECT * FROM ethan_mwas_20240717
+    SELECT * FROM mwas_mdfiles_info
     WHERE bioproject in (%s)
 """
 LOGAN_SRA_QUERY = ("""
@@ -228,7 +228,7 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     total_perm_tests = total_lambda_jobs = 0
     for bioproject_name, row_srs in biopj_info_df.groupby('bioproject'):
         bioproject_obj = BioProjectInfo(CONFIG, bioproject_name, row_srs['condensed_md_file_size'].iloc[0], row_srs['n_biosamples'].iloc[0], row_srs['n_sets'].iloc[0],
-                                        row_srs['n_permutation_sets'].iloc[0], 0,  # row_srs['n_skippable_permutation_sets'].iloc[0],
+                                        row_srs['n_permutation_sets'].iloc[0], row_srs['n_skippable_permutation_sets'].iloc[0],
                                         row_srs['n_groups'].iloc[0], row_srs['n_skipped_groups'].iloc[0])
 
         n_perm_tests, lambda_jobs = bioproject_obj.batch_lambda_jobs(main_df, 60)

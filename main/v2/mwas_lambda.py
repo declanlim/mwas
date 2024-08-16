@@ -25,6 +25,7 @@ def lambda_handler(event: dict, context) -> dict:
     # get the main_df
     try:
         s3.download_file(S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{MAIN_DF_PICKLE}", DIR_SUFFIX + 'main_df.pickle')
+        CONFIG.log_print(f"Downloaded main_df from s3", 1)
         with open(DIR_SUFFIX + 'main_df.pickle', 'rb') as f:
             main_df = pickle.load(f)
         os.remove(DIR_SUFFIX + 'main_df.pickle')
@@ -40,12 +41,15 @@ def lambda_handler(event: dict, context) -> dict:
     subset_df = main_df[main_df['bio_project'] == bioproject.name]
     del main_df
 
-    result = bioproject.process_bioproject(subset_df, job_window, lam_id)  # it needs to be the subset of main_df
-    if result is None:
-        return {'statusCode': 500, 'body': f"Error in processing bioproject {bioproject.name} job {lam_id}"}
     # make result file
-    with open(DIR_SUFFIX + 'result.txt', 'w') as f:
-        f.write(result)
+    CONFIG.OUT_FILE = DIR_SUFFIX + 'result.txt'
+    with open(CONFIG.OUT_FILE, 'w') as f:
+        f.write("")
+    success = bioproject.process_bioproject(subset_df, job_window, lam_id)  # it needs to be the subset of main_df
+    if not success:
+        return {'statusCode': 500, 'body': f"Error in processing bioproject {bioproject.name} job {lam_id}"}
+    else:
+        CONFIG.log_print(f"Bioproject {bioproject.name} job {lam_id} processed successfully.", 1)
 
     # upload the result and log files to s3
     try:
@@ -62,32 +66,33 @@ def lambda_handler(event: dict, context) -> dict:
 
 
 if __name__ == '__main__':
-    indexed_event = {"bioproject_info": {"name": "PRJDB7993",
-                                 "metadata_file_size": "132476",
-                                 "n_biosamples": "1990",
-                                 "n_sets": "1079",
-                                 "n_permutation_sets": "388",
-                                 "n_skippable_permutation_sets": "0",
-                                 "n_groups": "20",
-                                 "n_skipped_groups": "0",
-                                 "num_lambda_jobs": "26",
-                                 "num_conc_procs": "",
-                                 "groups": "['IFNA1', 'IFNA2', 'IFNL3', 'IFNL2', 'IFNL1', 'IFNG', 'IFNW1', 'IFNB1', 'IFNA21', 'IFNA17', 'IFNA16', 'IFNA14', 'IFNA13', 'IFNA10', 'IFNA8', 'IFNA7', 'IFNA6', 'IFNA5', 'IFNA4', 'IFNL4']"},
-             "link": "Tue_Aug__6_15-20-55_2024",
-             "job_window": {"IFNA1": [184, 384], "IFNA2": [0, 100]},
-             "id": 1,
-             "flags": {"IMPLICIT_ZEROS": "1",
-                       "GROUP_NONZEROS_ACCEPTANCE_THRESHOLD": "3",
-                       "ALREADY_NORMALIZED": "0",
-                       "P_VALUE_THRESHOLD": "0.005",
-                       "INCLUDE_SKIPPED_GROUP_STATS": "0",
-                       "TEST_BLACKLISTED_METADATA_FIELDS": "0",
-                       "LOGGING_LEVEL": "2",
-                       "USE_LOGGER": "1"},
-            "parallel": True
-            }
-    lambda_handler(indexed_event, None)
-
+    # indexed_event = {"bioproject_info": {"name": "PRJDB7993",
+    #                              "metadata_file_size": "141241",
+    #                              "n_biosamples": "1990",
+    #                              "n_sets": "1080",
+    #                              "n_permutation_sets": "388",
+    #                              "n_skippable_permutation_sets": "4",
+    #                              "n_groups": "20",
+    #                              "n_skipped_groups": "11",
+    #                              "num_lambda_jobs": "12",
+    #                              "num_conc_procs": "8",
+    #                              "groups": "['IFNA1', 'IFNA2', 'IFNL3', 'IFNL2', 'IFNL1', 'IFNG', 'IFNW1', 'IFNB1', 'IFNA21', 'IFNA17', 'IFNA16', 'IFNA14', 'IFNA13', 'IFNA10', 'IFNA8', 'IFNA7', 'IFNA6', 'IFNA5', 'IFNA4', 'IFNL4']"},
+    #          "link": "Tue_Aug__6_15-20-55_2024",
+    #          "job_window": {"IFNA1": [300, 384], "IFNW1": [0, 216]},
+    #          "id": 1,
+    #          "flags": {"IMPLICIT_ZEROS": "1",
+    #                    "GROUP_NONZEROS_ACCEPTANCE_THRESHOLD": "3",
+    #                    "ALREADY_NORMALIZED": "0",
+    #                    "P_VALUE_THRESHOLD": "0.005",
+    #                    "INCLUDE_SKIPPED_GROUP_STATS": "0",
+    #                    "TEST_BLACKLISTED_METADATA_FIELDS": "0",
+    #                    "LOGGING_LEVEL": "2",
+    #                    "USE_LOGGER": "1",
+    #                    "TIME_LIMIT": "60"},
+    #         "parallel": "1"
+    #         }
+    # lambda_handler(indexed_event, None)
+    #
     # full_event = {
     #     "bioproject_info": {
     #         "name": "PRJNA136121",
@@ -118,26 +123,27 @@ if __name__ == '__main__':
     # }
     # lambda_handler(full_event, None)
 
-    # t_event = {'bioproject_info': {'name': 'PRJDB7993',
-    #                               'metadata_file_size': '132476',
-    #                               'n_biosamples': '1990',
-    #                               'n_sets': '1079',
-    #                               'n_permutation_sets': '388',
-    #                               'n_skippable_permutation_sets': '0',
-    #                               'n_groups': '20',
-    #                               'n_skipped_groups': '0',
-    #                               'num_lambda_jobs': '26',
-    #                               'num_conc_procs': '3',
-    #                               'groups': 'everything'},
-    #           'link': 'Tue_Aug__6_15-20-55_2024',
-    #           'job_window': 'full',
-    #           'id': 0,
-    #           'flags': {'IMPLICIT_ZEROS': '0',
-    #                     'GROUP_NONZEROS_ACCEPTANCE_THRESHOLD': '4',
-    #                     'ALREADY_NORMALIZED': '0',
-    #                     'P_VALUE_THRESHOLD': '0.005',
-    #                     'INCLUDE_SKIPPED_GROUP_STATS': '0',
-    #                     'TEST_BLACKLISTED_METADATA_FIELDS': '0',
-    #                     'LOGGING_LEVEL': '2',
-    #                     'USE_LOGGER': '1'}}
-    # lambda_handler(t_event, None)
+    t_event = {'bioproject_info': {'name': 'PRJDB7993',
+                                  'metadata_file_size': '132476',
+                                  'n_biosamples': '1990',
+                                  'n_sets': '1079',
+                                  'n_permutation_sets': '388',
+                                  'n_skippable_permutation_sets': '0',
+                                  'n_groups': '20',
+                                  'n_skipped_groups': '0',
+                                  'num_lambda_jobs': '26',
+                                  'num_conc_procs': '3',
+                                  'groups': 'everything'},
+              'link': 'Tue_Aug__6_15-20-55_2024',
+              'job_window': 'full',
+              'id': 0,
+              'flags': {'IMPLICIT_ZEROS': '0',
+                        'GROUP_NONZEROS_ACCEPTANCE_THRESHOLD': '4',
+                        'ALREADY_NORMALIZED': '0',
+                        'P_VALUE_THRESHOLD': '0.005',
+                        'INCLUDE_SKIPPED_GROUP_STATS': '0',
+                        'TEST_BLACKLISTED_METADATA_FIELDS': '0',
+                        'LOGGING_LEVEL': '2',
+                        'USE_LOGGER': '1',
+                        'TIME_LIMIT': '60'}}
+    lambda_handler(t_event, None)

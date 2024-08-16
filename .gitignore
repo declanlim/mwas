@@ -28,3 +28,4 @@ main/tests/metadata_set_maker_tests/test_files/
 main/real_mwas_runs/
 main/v2/test*
 main/v2/__pycache__/
+main/utilities/readable_condensed_bioproject_metadata_csvs/
