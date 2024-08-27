@@ -59,6 +59,7 @@ BLACKLISTED_METADATA_FIELDS = {
 # constants
 NORMALIZING_CONST = 1000000  # 1 million
 LAMBDA_RANGE = (128 * 1024 ** 2, 2048 * 1024 ** 2)  # 128 MB to 10240 MB (max lambda memory size
+LAMBDA_SIZES = ((2, 900), (3, 3600), (4, 5400), (5, 7200), (6, 10240))
 PERCENT_USED = 0.8  # 80% of the memory will be used
 MAX_RAM_SIZE = PERCENT_USED * LAMBDA_RANGE[1]
 LAMBDA_CPU_CORES = 6
@@ -86,7 +87,7 @@ class Config:
     PARALLELIZE = 1
     FILE_LOCK = Lock()
     OUT_FILE = None
-    TIME_LIMIT = 30
+    TIME_LIMIT = 60
 
     def to_json(self) -> dict:
         """Convert the configuration settings to a dictionary
@@ -165,6 +166,7 @@ class BioProjectInfo:
         self.metadata_path = None
         self.rpm_map = None
         self.num_lambda_jobs = num_lambda_jobs
+        self.lambda_size = 3600  # default lambda size
         self.num_conc_procs = num_conc_procs
         self.groups = [] if groups is None else groups
         self.jobs = [] if jobs is None else jobs  # only used in preprocessing stage
@@ -190,16 +192,28 @@ class BioProjectInfo:
         time_constraint: in seconds
         """
         # choosing lambda size
-        mem_width = self.n_biosamples * 240000 + PROCESS_OVERHEAD_BOUND
-        n_conc_procs = LAMBDA_CPU_CORES
-        while mem_width * n_conc_procs > MAX_RAM_SIZE:
+        mem_width = self.n_biosamples * 240000 + PROCESS_OVERHEAD_BOUND  # this is in bytes
+        # note, num of cpu cores = index in LAMBDA_SIZES + 2, so e.g. 2 cores for 900MB, 3 cores for 3600MB, etc.
+        size_index = len(LAMBDA_SIZES) - 1  # start with the largest size, since it has better compute power and more cores
+        n_conc_procs = LAMBDA_SIZES[size_index][0]
+        while mem_width * n_conc_procs * 10.5 < (LAMBDA_SIZES[size_index][1] * 1024 ** 2) * 0.8:
+            if size_index == 0:
+                break
+            size_index -= 1
+            n_conc_procs = LAMBDA_SIZES[size_index][0]
+        while mem_width * n_conc_procs > (LAMBDA_SIZES[size_index][1] * 1024 ** 2) * PERCENT_USED:
             n_conc_procs -= 1
-        if n_conc_procs == 0:
-            self.config.log_print(f"Error: not enough memory to run a single test on a lambda functions for bio_project {self.name}")
-            return 0, 0
-        self.num_conc_procs = n_conc_procs
+            if n_conc_procs < 1:
+                size_index -= 1
+                if size_index == -1:
+                    self.config.log_print(f"Error: not enough memory to run a single test on a lambda functions for bio_project")
+                    return 0, 0
+                n_conc_procs = LAMBDA_SIZES[size_index][0]
 
-        time_per_test = self.n_biosamples * 0.0003
+        self.num_conc_procs = n_conc_procs
+        self.lambda_size = LAMBDA_SIZES[size_index][1]
+
+        time_per_test = self.n_biosamples * 0.0004
         total_tests = (self.n_groups - self.n_skipped_groups) * self.n_actual_permutation_sets
         lambda_area = (math.floor(time_constraint / time_per_test) * n_conc_procs)
         self.num_lambda_jobs = math.ceil(total_tests / lambda_area)
@@ -257,11 +271,12 @@ class BioProjectInfo:
         flags = self.config.to_json()
 
         self.config.log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
-        # non permutation test lambda(TODO: lambda[s]?)
+        # non permutation test lambda(TODO: lambda[s]?)  always uses the 4 core 5400MB ram lambda
         lam_client.invoke(
-            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',   # TODO: specify alias (e.g. mwas:900MBmem)
+            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas:5400MBram',  # to get accepted by SNS policy
             InvocationType='Event',  # Asynchronous invocation
             Payload=json.dumps({
+                'mwas reason': 'block of statistical t-tests',
                 'bioproject_info': bioproject_info,
                 'link': link,
                 'job_window': 'full',  # empty implies all groups
@@ -270,13 +285,16 @@ class BioProjectInfo:
             })
         )
 
+        # pick the next lambda size to fit our size
+        lambda_alias = f"{self.lambda_size}MBram"
         for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
             self.config.log_print(f"dispatching lambda job {i + 1} for {self.name}")
             # Invoke the Lambda function
             lam_client.invoke(
-                FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
+                FunctionName=f'arn:aws:lambda:us-east-1:797308887321:function:mwas:{lambda_alias}',
                 InvocationType='Event',  # Asynchronous invocation
                 Payload=json.dumps({
+                    'mwas reason': 'block of statistical permutation tests',  # to get accepted by SNS policy
                     'bioproject_info': bioproject_info,
                     'link': link,
                     'job_window': job,
@@ -380,7 +398,7 @@ class BioProjectInfo:
         identifier = f"B{id}/{self.num_lambda_jobs}"
         self.config.log_print(f"RETRIEVING METADATA FOR {self.name}...")
         self.retrieve_metadata()
-        if self.metadata_df.shape[0] < 4:
+        if self.metadata_df.shape[0] < 1:
             # although no metadata should have 0 rows, since those would be condensed to an empty file
             # and then filtered out in metadata_retrieval, this is just a safety check
             self.config.log_print(f"Skipping {self.name} since its metadata is empty or too small. "
@@ -566,7 +584,7 @@ class BioProjectInfo:
         try:
             num_workers = min(cpu_count(), self.num_conc_procs)
             series_time = 0.0004 * self.n_biosamples * num_tests
-            if self.config.PARALLELIZE and num_workers > 1 and series_time > self.config.TIME_LIMIT:
+            if self.config.PARALLELIZE and num_workers > 1 and series_time > self.config.TIME_LIMIT / 4:
                 workers = {}
                 num_instances = len(tests)
                 instance_range = num_instances // num_workers
@@ -649,6 +667,8 @@ class BioProjectInfo:
         self.config.log_print(f"Test took {test_end_time} seconds", 2)
 
         # record the output
+        if test_statistic == "-inf":
+            test_statistic = "negative inf"
         this_result = (
             f"{self.name},{row['group']},{row['attributes'].replace(',', ' ')},{row['values'].replace(',', ' ')},{status},"
             f"{num_true},{num_false},{mean_rpm_true},{mean_rpm_false},{sd_rpm_true},{sd_rpm_false},{fold_change},"

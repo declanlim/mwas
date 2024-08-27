@@ -74,7 +74,8 @@ def update_progress(status, num_bioprojects, num_lambda_jobs, num_permutation_te
             'num_lambda_jobs': str(num_lambda_jobs),
             'num_permutation_tests': str(num_permutation_tests),
             'num_jobs_completed': str(num_jobs_completed),
-            'time_elapsed': str(time.time() - start_time)
+            'time_elapsed': str(time.time() - start_time),
+            'start_time': str(start_time)
         }, f)
     if sync_s3:
         s3_sync()
@@ -249,12 +250,16 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     update_progress('Dispatching Lambdas', num_bioprojects, total_lambda_jobs, total_perm_tests, 0, start_time)
     del biopj_info_df, main_df
 
-    # ================
-    # PROCESSING
-    # ================
+    # graph this to see lambda job count distribution: sorted([bioprojects_dict[x].num_lambda_jobs for x in bioprojects_dict])
 
-    # TODO: invoke SNS and tell it to start listening for the results and how many results to expect
     LAMBDA_CLIENT = boto3.client('lambda')
+    # TODO: invoke postprocessing lambda that also acts as a subscriber to the sns topic, so it recieves lambda notifications and then begins postprocessing once all lambdas are done
+
+
+
+
+
+
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
         bioproject_obj.dispatch_all_lambda_jobs(hash_dest, LAMBDA_CLIENT)
@@ -383,7 +388,7 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
         update_progress('Processing', num_bioprojects, num_lambda_jobs, num_permutation_tests, 0, time_start)
 
         # remove the local copy of the s3 bucket
-        rmtree(TEMP_LOCAL_BUCKET)
+        # rmtree(TEMP_LOCAL_BUCKET)  problem: it tries removing the log file, which it cannot do while using it
         print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
 
         return 0, f'Preprocessing completed in {time.time() - time_start} seconds'

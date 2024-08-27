@@ -21,7 +21,8 @@ main/mwas_results_folder_*
 main/bioprojects_ignored.txt
 main/mwas_logging.txt
 main/request.json
-lambda_stuff/
+lambda_stuff/lam_pack/
+lambda_stuff/deppack.zip
 main/tests/other_tests/__pycache__/
 main/condensing_conversion/__pycache__/
 main/tests/metadata_set_maker_tests/test_files/
