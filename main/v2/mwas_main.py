@@ -1,5 +1,7 @@
 """main function to run MWAS on the given data file, i.e. starting point"""
 import sys
+import uuid
+
 import psycopg2
 from shutil import rmtree
 from mwas_functions import *
@@ -253,17 +255,26 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     # graph this to see lambda job count distribution: sorted([bioprojects_dict[x].num_lambda_jobs for x in bioprojects_dict])
 
     LAMBDA_CLIENT = boto3.client('lambda')
-    # TODO: invoke postprocessing lambda that also acts as a subscriber to the sns topic, so it recieves lambda notifications and then begins postprocessing once all lambdas are done
-
-
-
-
-
-
+    mwas_id = str(uuid.uuid4())
+    # DISPATCH ALL LAMBDA JOBS
+    actual_lambda_count = 0
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.dispatch_all_lambda_jobs(hash_dest, LAMBDA_CLIENT)
+        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, hash_dest, LAMBDA_CLIENT)
         del bioproject_obj
+
+    # DISPATCH THE POSTPROCESSING LAMBDA (also acts as dynamodb listener until 100 seconds or all lambdas are done)
+    LAMBDA_CLIENT.invoke(
+        FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_post',  # to get accepted by SNS policy
+        InvocationType='Event',  # Asynchronous invocation
+        Payload=json.dumps({
+            'mwas_id': mwas_id,
+            'wait_time': 100,  # seconds until the post proc. stops waiting for new messages and begins post processing
+            'check_interval': 1,  # seconds between each check for new messages
+            'expected_jobs': total_lambda_jobs,  # VERY important. This is how the post proc. knows how many items from dynamodb it needs
+            'link': hash_dest,
+        })
+    )
 
     return num_bioprojects, total_lambda_jobs, total_perm_tests
 

@@ -262,7 +262,7 @@ class BioProjectInfo:
         assert self.num_lambda_jobs == len(self.jobs)
         return self.n_actual_permutation_sets, self.num_lambda_jobs
 
-    def dispatch_all_lambda_jobs(self, link: str, lam_client: boto3.client) -> None:
+    def dispatch_all_lambda_jobs(self, mwas_id: str, link: str, lam_client: boto3.client, expected_jobs) -> None:
         """lam_client: lambda_client = boto3.client('lambda')
 
         note lambda handler will call self.process_bioproject(...)
@@ -276,12 +276,14 @@ class BioProjectInfo:
             FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas:5400MBram',  # to get accepted by SNS policy
             InvocationType='Event',  # Asynchronous invocation
             Payload=json.dumps({
+                'mwas_id': mwas_id,
                 'mwas reason': 'block of statistical t-tests',
                 'bioproject_info': bioproject_info,
                 'link': link,
                 'job_window': 'full',  # empty implies all groups
                 'id': 0,  # 0 implies this is the non-perm tests lambda
-                'flags': flags
+                'flags': flags,
+                'expected_jobs': expected_jobs
             })
         )
 
@@ -294,12 +296,14 @@ class BioProjectInfo:
                 FunctionName=f'arn:aws:lambda:us-east-1:797308887321:function:mwas:{lambda_alias}',
                 InvocationType='Event',  # Asynchronous invocation
                 Payload=json.dumps({
+                    'mwas_id': mwas_id,
                     'mwas reason': 'block of statistical permutation tests',  # to get accepted by SNS policy
                     'bioproject_info': bioproject_info,
                     'link': link,
                     'job_window': job,
                     'id': str(i + 1),
-                    'flags': flags
+                    'flags': flags,
+                    'expected_jobs': expected_jobs
                 })
             )
 
