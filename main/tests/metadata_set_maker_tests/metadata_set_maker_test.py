@@ -9,7 +9,7 @@ import sys
 # import pdb
 # pdb.set_trace()
 
-from main.metadata_set_maker import metadata_to_set_accession
+from main.condensing_conversion.metadata_set_maker import metadata_to_set_accession
 
 METADATA_FILES = ['TEST--PRJEB37099.csv', 'TEST_LARGE--PRJDB11622.csv', 'TEST_MEDIUM--PRJDB10214.csv', 'TEST_SMALL--PRJDA67149.csv']
 TEST_ALL_COLUMNS = True
@@ -49,6 +49,16 @@ def metadata_set_maker_test_setup(metadata_file):
     set_df.to_csv(out_file, index=False)
     output_size = os.path.getsize(out_file)
 
+    # Lowercase and replace ';' with ':' for all columns except 'biosample_id'
+    for col in metadata_dataframe.columns:
+        if col != 'biosample_id':
+            metadata_dataframe[col] = metadata_dataframe[col].apply(lambda x: x.replace(';', ':').lower() if isinstance(x, str) else x)
+    # Ensure 'biosample_id' values are uppercase
+    metadata_dataframe['biosample_id'] = metadata_dataframe['biosample_id'].str.upper()
+    # Lowercase and replace ';' with ':' in column names
+    metadata_dataframe.columns = [col.replace(';', ':').lower() for col in metadata_dataframe.columns]
+
+
     if not TEST_ALL_COLUMNS:
         # spot checking random column
         row = set_df.sample().iloc[0]
@@ -57,8 +67,10 @@ def metadata_set_maker_test_setup(metadata_file):
         return compare_metadata(set_df, metadata_dataframe, col, values), creation_time, output_size
     else:
         # testing all columns
-        columns = set_df['attributes'].apply(lambda x: x.split('; ')[0]).unique()
-        for col in columns:
+        columns, cols = set(set_df['attributes']), []
+        for sett in columns:
+            cols.extend(sett.split('; '))
+        for col in cols:
             new_set_df, values = reconstruct_metadata(set_df, biosamples_ref, col)
             if not compare_metadata(new_set_df, metadata_dataframe, col, values):
                 print(f"Failed on column: {col} on file: {metadata_file}")
@@ -108,11 +120,10 @@ def reconstruct_metadata(set_df, biosamples_ref, attr_name):
 def compare_metadata(reconstructed_df, metadata_df, col, values):
     """compares a column of metadata_df with a column of set_df to see if they match up"""
     for _, row in metadata_df.iterrows():
-
         biosample = row['biosample_id']
         value = str(row[col])
         if isinstance(value, str):
-            value.replace(';', ':')
+            value = value.replace(';', ':').lower()
         if value not in values:
             # then it's possible it's a singleton or a missing value (nan), otherwise there's an issue.
             if pd.isna(value) or value == 'nan':
@@ -125,7 +136,7 @@ def compare_metadata(reconstructed_df, metadata_df, col, values):
                         continue
                     else:
                         if isinstance(val, str):
-                            val = val.replace(';', ':')
+                            val = val.replace(';', ':').lower()
                         if str(val) not in values:
                             return False
         else:

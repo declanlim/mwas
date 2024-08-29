@@ -1,0 +1,7 @@
+The code in this folder is outdated (v1)
+
+v1 is meant to be run via server or locally, without any aws infrastructure
+(aside from s3 storage, which wasn't even fully implemented when I moved on to v2)
+
+please refer to the latest version in the v2 folder
+// ================================================

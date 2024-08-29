@@ -1,0 +1,32 @@
+Set up deployment package
+
+# make lam_pack dir
+# add mwas_lambda.py and mwas_functions.py to the dir from v2
+# edit mwas_lambda.py so that it doesn't have its if __name__ == main tests,
+# and edit mwas_functions.py so that DIR_SUFFIX = '/tmp/' instead of ''
+# run the following:
+
+pip install --platform manylinux2014_x86_64 --target=. --implementation cp --python-version 3.12 --only-binary=:all: --upgrade scipy=1.13.0
+pip install --platform manylinux2014_x86_64 --target=. --implementation cp --python-version 3.12 --only-binary=:all: --upgrade pandas==2.2.2
+
+# then manually remove all numpy related files (since they're 2.0.1), but keep the bin folder
+
+pip install --platform manylinux2014_x86_64 --target=numpy_stuff --implementation cp --python-version 3.12 --only-binary=:all: --upgrade numpy==1.26.4
+
+# then move all contents from numpy_stuff out to lam_pack, except for the bin folder
+# then remove lam_pack/numpy_stuff
+
+# then run this to cut down the size of the deployment package:
+find . -type d -name '__pycache__' -exec rm -r {} \;
+
+# make sure there's no zip folder in ../lam_pack. Delete it if it exists
+# then zip the contents (be inside lam_pack when running this) via:
+zip -r ../deppack.zip .
+
+# go back to the parent dir of lam_pack
+# check the deppack folder and zipped size
+du -cksh *
+# (aws lambda needs it (the unzipped version) to be under 262MB)
+
+# then upload the zip file to AWS Lambda
+aws s3 cp deppack.zip s3://serratus-biosamples/mwas_lambda_zips/deppack.zip
