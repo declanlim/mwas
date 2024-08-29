@@ -4,7 +4,7 @@ import csv
 from flask import Flask, request, jsonify
 import os
 import logging
-import mwas_general
+from main.v1 import mwas_general
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)

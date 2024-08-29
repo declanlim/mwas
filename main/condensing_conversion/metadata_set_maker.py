@@ -1,4 +1,4 @@
-"""turn a bioproject metadata file into a
+"""used by converter_.py to convert metadata to a df of test sets for MWAS's condensing conversion workflow
 """
 import sys
 from typing import Any

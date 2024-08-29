@@ -92,38 +92,6 @@ def s3_sync():
         CONFIG.log_print(f"Error in syncing s3 bucket: {S3_OUTPUT_DIR}", 0)
 
 
-def concat_s3_results(s3_dir: str) -> None:
-    """Concatenate all the results in the s3 bucket outputs directory into a single csv file
-
-    NOTE: this should be moved to a new lambda, and shouldn't be in preproc code (this file)
-    """
-    # create a local dir to store the results
-    results_dir = f"{TEMP_LOCAL_BUCKET}/{OUTPUT_FILES_DIR}"
-    os.mkdir(results_dir)
-
-    process = subprocess.run(SHELL_PREFIX + f"s5cmd cp -r {S3_OUTPUT_DIR} {results_dir}", shell=True)
-    if process.returncode == 0:
-        CONFIG.log_print(f"Successfully copied s3 bucket: {S3_OUTPUT_DIR}")
-    else:
-        CONFIG.log_print(f"Error in copying s3 bucket: {S3_OUTPUT_DIR}", 0)
-        return
-
-    # concatenate all the result files into a single csv file
-    with open(f"{TEMP_LOCAL_BUCKET}/{OUTPUT_CSV_FILE}", 'w') as final_output:
-        final_output.write(','.join(OUT_COLS) + ',job_id\n')  # write the header
-        for file in os.listdir(results_dir):  # for each file in the results directory
-            if file.endswith('.txt'):
-                with open(f"{results_dir}/{file}", 'r') as result_file:
-                    # get lines from the file
-                    lines = result_file.readlines()
-                    for line in lines:
-                        # filter blank lines
-                        if ',' in line:  # lines with commas are the ones we want since they have csv data
-                            final_output.write(line)
-    rmtree(results_dir)
-    CONFIG.log_print(f"Concatenated all results into {OUTPUT_CSV_FILE}")
-
-
 def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd.DataFrame | None:
     """Get the data from the given table using the given query with the given accessions
     """
@@ -257,24 +225,23 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     LAMBDA_CLIENT = boto3.client('lambda')
     mwas_id = str(uuid.uuid4())
     # DISPATCH ALL LAMBDA JOBS
-    actual_lambda_count = 0
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, hash_dest, LAMBDA_CLIENT)
+        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, hash_dest, LAMBDA_CLIENT, total_lambda_jobs)
         del bioproject_obj
 
-    # DISPATCH THE POSTPROCESSING LAMBDA (also acts as dynamodb listener until 100 seconds or all lambdas are done)
-    LAMBDA_CLIENT.invoke(
-        FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_post',  # to get accepted by SNS policy
-        InvocationType='Event',  # Asynchronous invocation
-        Payload=json.dumps({
-            'mwas_id': mwas_id,
-            'wait_time': 100,  # seconds until the post proc. stops waiting for new messages and begins post processing
-            'check_interval': 1,  # seconds between each check for new messages
-            'expected_jobs': total_lambda_jobs,  # VERY important. This is how the post proc. knows how many items from dynamodb it needs
-            'link': hash_dest,
-        })
-    )
+    # # DISPATCH THE POSTPROCESSING LAMBDA (also acts as dynamodb listener until 100 seconds or all lambdas are done)
+    # LAMBDA_CLIENT.invoke(
+    #     FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_post',  # to get accepted by SNS policy
+    #     InvocationType='Event',  # Asynchronous invocation
+    #     Payload=json.dumps({
+    #         'mwas_id': mwas_id,
+    #         'wait_time': 100,  # seconds until the post proc. stops waiting for new messages and begins post processing
+    #         'check_interval': 1,  # seconds between each check for new messages
+    #         'expected_jobs': total_lambda_jobs,  # VERY important. This is how the post proc. knows how many items from dynamodb it needs
+    #         'link': hash_dest,
+    #     })
+    # )
 
     return num_bioprojects, total_lambda_jobs, total_perm_tests
 
@@ -387,15 +354,6 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
         num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start, hash_dest)
         CONFIG.log_print(f"Time taken: {time.time() - time_start} minutes", 0)
 
-        # create header for output file
-        with open(output_file_actual, 'w') as f:
-            header = ''
-            for word in OUT_COLS:
-                if word == 'group':
-                    header += f"{group_by},"
-                else:
-                    header += word + ','
-            f.write(header[:-1] + '\n')
         update_progress('Processing', num_bioprojects, num_lambda_jobs, num_permutation_tests, 0, time_start)
 
         # remove the local copy of the s3 bucket
@@ -408,6 +366,6 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
         return 1, 'invalid arguments'
 
 
-if __name__ == '__main__':
-    exit_code = main(sys.argv)
-    sys.exit(exit_code)
+# if __name__ == '__main__':
+#     exit_code = main(sys.argv)
+#     sys.exit(exit_code)

@@ -1,3 +1,13 @@
+"""used to take all raw mwas metadata csv files in one directory, convert them into condensed mwaspkl files, then store them in another directory
+note that this does not do any s3 operations, only local file operations
+
+the raw csvs are meant to originate from s3 raw metadata folder, a.k.a serratus-biosamples/bioprojects_csv/
+and those were created via the biosample csvs in serratus-biosamples/biosamples_csv/, which were scraped from NCBI biosample data
+(TODO: include those scripts in this folder. They are still part of Declan's codebase)
+
+the condensed files that are created from this (converter_.py) script are meant to be uploaded to s3 folder: serratus-biosamples/condensed-bioproject-metadata/
+"""
+
 import os
 import sys
 import time

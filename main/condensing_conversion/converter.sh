@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# DISCLAIMER: not recommended for usage.
+# RECOMMENDED: manually download files from s3 (raw metadata csvs) and run the converter_.py script locally onto a local dir, then sync the converted files to s3 condensed metadata folder
+
 # get a list of files from the s3 bucket, and save them to a file,
 # or use argument to specify a list of files to download
 if [ ! -d ~/raw_metadata_csvs ]; then

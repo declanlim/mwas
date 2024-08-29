@@ -1,4 +1,6 @@
-""""""
+"""to be run on after converter_.py is done and has produced the metadata_files_info_table.csv file in a data directory located in ../ relative to this file
+The output file from this script is meant to be used to update the SQL table mwas_mdfiles_info
+"""
 import os
 import sys
 

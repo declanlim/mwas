@@ -23,6 +23,3 @@ cd ~/mwas
 split -l 55 -d --additional-suffix=.txt family_groups_all.txt family_group_
 
 ls family_groups/ | parallel -j 40 --jl mwas_rfam.log "python mwas_rfam.py"
-
-
-# ssh -i notes/rnalab-ethan-key2.pem ubuntu@ec2-44-223-26-21.compute-1.amazonaws.com
