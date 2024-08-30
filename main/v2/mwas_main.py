@@ -352,7 +352,7 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
         # RUN MWAS
         CONFIG.log_print("RUNNING MWAS...", 0)
         num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start, hash_dest)
-        CONFIG.log_print(f"Time taken: {time.time() - time_start} minutes", 0)
+        CONFIG.log_print(f"Time taken: {time.time() - time_start} seconds", 0)
 
         update_progress('Processing', num_bioprojects, num_lambda_jobs, num_permutation_tests, 0, time_start)
 
