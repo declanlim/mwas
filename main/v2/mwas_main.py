@@ -366,6 +366,6 @@ def main(args: list[str]) -> int | None | tuple[int, str]:
         return 1, 'invalid arguments'
 
 
-# if __name__ == '__main__':
-#     exit_code = main(sys.argv)
-#     sys.exit(exit_code)
+if __name__ == '__main__':
+    exit_code = main(sys.argv)
+    sys.exit(exit_code)

@@ -86,8 +86,8 @@ def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, 
     dynamodb = boto3.resource('dynamodb')
     table = dynamodb.Table('mwas_notification_handler')
     item = {
-        'mwas_id': mwas_id,  # unique identifier for the mwas run given by the preprocessing function (so all lambdas have the same mwas_id), this is the dynamoDB partition key
-        'lambda_id': process_id,  # unique identifier for the lambda, this is the dynamoDB sort key
+        'mwas_id': str(mwas_id),  # unique identifier for the mwas run given by the preprocessing function (so all lambdas have the same mwas_id), this is the dynamoDB partition key
+        'lambda_id': str(process_id),  # unique identifier for the lambda, this is the dynamoDB sort key
         'status_code': status_code,  # success or failure
         'message': message,  # exit message
         'time_duration': str(time_duration),  # informs how long the lambda took to run (seconds), to help compute cost
@@ -105,15 +105,34 @@ def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, 
         ExpressionAttributeValues={":pk_value": {"S": mwas_id}},
         Select="COUNT"
     )
+    CONFIG.log_print(f"Count of items in dynamoDB: {response['Count']}", 1)
     if response['Count'] >= expected_jobs:
         # all lambdas have finished
         # send a message to the SNS topic to notify the user
         sns = boto3.client('sns')
         sns.publish(
-            TopicArn='arn:aws:sns:us-east-1:123456789012:mwas_notification_topic',
+            TopicArn='arn:aws:sns:us-east-1:797308887321:mwas_sns',
             Message=json.dumps({'mwas_id': mwas_id, 'link': link, 'expected_jobs': expected_jobs,
-                                'Message': 'All lambdas have finished'}),  # Message is important to be written like this, or else post proc won't get triggered
-            Subject=f"MWAS run {mwas_id} has completed"
+                                'status': 'All lambdas have finished'}),  # Message is important to be written like this, or else post proc won't get triggered
+            Subject=f"MWAS run {mwas_id} has completed",
+            MessageAttributes={
+                'status': {
+                    'DataType': 'String',
+                    'StringValue': 'All lambdas have finished'
+                },
+                'mwas_id': {
+                    'DataType': 'String',
+                    'StringValue': mwas_id
+                },
+                'link': {
+                    'DataType': 'String',
+                    'StringValue': link
+                },
+                'expected_jobs': {
+                    'DataType': 'Number',
+                    'StringValue': str(expected_jobs)
+                }
+            }
         )
         CONFIG.log_print(f"This was the last lambda to finish. Notified the SNS topic to trigger postprocessing", 1)
     else:

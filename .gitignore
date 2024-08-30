@@ -30,3 +30,5 @@ main/real_mwas_runs/
 main/v2/test*
 main/v2/__pycache__/
 main/utilities/readable_condensed_bioproject_metadata_csvs/
+main/lambda_stuff/lam_pack/
+main/lambda_stuff/deppack.zip
