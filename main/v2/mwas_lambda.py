@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from mwas_functions import *
 
 CONFIG = Config()
-
+s3 = boto3.client('s3')
 
 def lambda_handler(event: dict, context):
     """Lambda handler for MWAS"""
@@ -31,10 +31,10 @@ def lambda_handler(event: dict, context):
             CONFIG.PARALLELIZE = event['parallel']
         CONFIG.set_logger(DIR_SUFFIX + f"log_{bioproject_info['name']}_job{lam_id}.txt")
 
+        CONFIG.log_print(f"recieved message: {event}", 1)
         CONFIG.log_print(f"Starting MWAS processing for {bioproject_info['name']} job {lam_id}.", 1)
         CONFIG.log_print(f"Lambda info: {context}", 1)
 
-        s3 = boto3.client('s3')
         # get the main_df
         try:
             s3.download_file(S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{MAIN_DF_PICKLE}", DIR_SUFFIX + 'main_df.pickle')
@@ -45,7 +45,7 @@ def lambda_handler(event: dict, context):
 
         except Exception as e:
             CONFIG.log_print(f"Error in loading main_df: {e}", 2)
-            return dynamoDB_store(500, f"Error in loading main_df: {e}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
+            return exit_handler(500, f"Error in loading main_df: {e}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
 
         # TODO: for loop here to handle multiple bioprojects in series if the event says so. This will be to optimize for smaller bioprojects, so we don't need to make a new lambda
         #  for each one - which would be especially costly when main_df is large get the bioproject info
@@ -60,34 +60,41 @@ def lambda_handler(event: dict, context):
             f.write("")
         success = bioproject.process_bioproject(subset_df, job_window, lam_id)  # it needs to be the subset of main_df
         if not success:
-            return dynamoDB_store(500, f"Error in processing bioproject {bioproject.name} job {lam_id}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
+            return exit_handler(500, f"Error in processing bioproject {bioproject.name} job {lam_id}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
         else:
             CONFIG.log_print(f"Bioproject {bioproject.name} job {lam_id} processed successfully.", 1)
 
-        # upload the result and log files to s3
-        try:
-            s3.upload_file(DIR_SUFFIX + 'result.txt', S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{OUTPUT_FILES_DIR}/result_{bioproject.name}_job{lam_id}.txt")
-            os.remove(DIR_SUFFIX + 'result.txt')
-
-            s3.upload_file(DIR_SUFFIX + f"log_{bioproject_info['name']}_job{lam_id}.txt", S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{PROC_LOG_FILES_DIR}/log_{bioproject.name}_job{lam_id}.txt")
-
-        except Exception as e:
-            CONFIG.log_print(f"Error in syncing output: {e}", 2)
-            return dynamoDB_store(500, f"Error in putting output to s3: {e}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
-
-        return dynamoDB_store(200, f'MWAS processing completed for {bioproject.name} job {lam_id}', time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
+        return exit_handler(200, f'MWAS processing completed for {bioproject.name} job {lam_id}', time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
     except Exception as e:
         CONFIG.log_print(f"Error in processing: {e}", 2)
-        return dynamoDB_store(500, f"Error in processing: {e}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
+        return exit_handler(500, f"Error in processing: {e}", time.perf_counter() - start_time, size, process_id, mwas_id, expected_jobs, link)
+
+
+def exit_handler(status_code, message, time_duration, alias_size, process_id, mwas_id, expected_jobs, link):
+    """Exit function for testing"""
+    # upload the result and log files to s3
+    try:
+        s3.upload_file(DIR_SUFFIX + 'result.txt', S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{OUTPUT_FILES_DIR}/result_{process_id}.txt")
+        CONFIG.log_print(f"Uploaded output file to s3", 1)
+        # os.remove(DIR_SUFFIX + 'result.txt')
+    except Exception as e:
+        CONFIG.log_print(f"Error in uploading output file: {e}", 2)
+    try:
+        s3.upload_file(DIR_SUFFIX + f"log_{process_id}.txt", S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{PROC_LOG_FILES_DIR}/log_{process_id}.txt")
+        CONFIG.log_print(f"Uploaded log file to s3", 1)
+    except Exception as e:
+        CONFIG.log_print(f"Error in uploading log file: {e}", 2)
+    return dynamoDB_store(status_code, message, time_duration, alias_size, process_id, mwas_id, expected_jobs, link)
 
 
 def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, mwas_id, expected_jobs, link):
     """Publishes a message to an SNS topic"""
+    CONFIG.log_print(f"Storing exit message in dynamoDB", 1)
     dynamodb = boto3.resource('dynamodb')
     table = dynamodb.Table('mwas_notification_handler')
     item = {
-        'mwas_id': mwas_id,  # unique identifier for the mwas run given by the preprocessing function (so all lambdas have the same mwas_id), this is the dynamoDB partition key
-        'lambda_id': process_id,  # unique identifier for the lambda, this is the dynamoDB sort key
+        'mwas_id': str(mwas_id),  # unique identifier for the mwas run given by the preprocessing function (so all lambdas have the same mwas_id), this is the dynamoDB partition key
+        'lambda_id': str(process_id),  # unique identifier for the lambda, this is the dynamoDB sort key
         'status_code': status_code,  # success or failure
         'message': message,  # exit message
         'time_duration': str(time_duration),  # informs how long the lambda took to run (seconds), to help compute cost
@@ -105,15 +112,34 @@ def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, 
         ExpressionAttributeValues={":pk_value": {"S": mwas_id}},
         Select="COUNT"
     )
+    CONFIG.log_print(f"Count of items in dynamoDB: {response['Count']}", 1)
     if response['Count'] >= expected_jobs:
         # all lambdas have finished
         # send a message to the SNS topic to notify the user
         sns = boto3.client('sns')
         sns.publish(
-            TopicArn='arn:aws:sns:us-east-1:123456789012:mwas_notification_topic',
+            TopicArn='arn:aws:sns:us-east-1:797308887321:mwas_sns',
             Message=json.dumps({'mwas_id': mwas_id, 'link': link, 'expected_jobs': expected_jobs,
-                                'Message': 'All lambdas have finished'}),  # Message is important to be written like this, or else post proc won't get triggered
-            Subject=f"MWAS run {mwas_id} has completed"
+                                'status': 'All lambdas have finished'}),  # Message is important to be written like this, or else post proc won't get triggered
+            Subject=f"MWAS run {mwas_id} has completed",
+            MessageAttributes={
+                'status': {
+                    'DataType': 'String',
+                    'StringValue': 'All lambdas have finished'
+                },
+                'mwas_id': {
+                    'DataType': 'String',
+                    'StringValue': mwas_id
+                },
+                'link': {
+                    'DataType': 'String',
+                    'StringValue': link
+                },
+                'expected_jobs': {
+                    'DataType': 'Number',
+                    'StringValue': str(expected_jobs)
+                }
+            }
         )
         CONFIG.log_print(f"This was the last lambda to finish. Notified the SNS topic to trigger postprocessing", 1)
     else:

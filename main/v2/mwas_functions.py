@@ -18,9 +18,8 @@ import pandas as pd
 import numpy as np
 from scipy.stats import permutation_test, ttest_ind_from_stats
 
-
 # s3 constants
-DIR_SUFFIX = ''  # '/tmp/' for deployment, '' for local testing
+DIR_SUFFIX = '/tmp/depp'  # '/tmp/' for deployment, '' for local testing
 S3_BUCKET_BOTO = 'serratus-biosamples'
 S3_METADATA_DIR_BOTO = 'condensed-bioproject-metadata'
 S3_OUTPUT_DIR_BOTO = 'mwas_data'
@@ -59,7 +58,7 @@ BLACKLISTED_METADATA_FIELDS = {
 # constants
 NORMALIZING_CONST = 1000000  # 1 million
 LAMBDA_RANGE = (128 * 1024 ** 2, 2048 * 1024 ** 2)  # 128 MB to 10240 MB (max lambda memory size
-LAMBDA_SIZES = ((2, 900), (3, 3600), (4, 5400), (5, 7200), (6, 10240))
+LAMBDA_SIZES = ((2, 900), (4, 5400), (6, 10240))
 PERCENT_USED = 0.8  # 80% of the memory will be used
 MAX_RAM_SIZE = PERCENT_USED * LAMBDA_RANGE[1]
 LAMBDA_CPU_CORES = 6
@@ -77,7 +76,7 @@ class Config:
     LOGGER = None
     USE_LOGGER = 1
     LOGGING_LEVEL = 2
-    IMPLICIT_ZEROS = 0
+    IMPLICIT_ZEROS = 1  # if True, then we assume that a missing value is a zero
     MAP_UNKNOWN = 0  # maybe np.nan. Use -1 for when IMPLICIT_ZEROS is False
     GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 3  # if group has at least this many nonzeros, then it's okay. Note, this flag is only used if IMPLICIT_ZEROS is True
     ALREADY_NORMALIZED = 0  # if it's false, then we need to normalize the data by dividing quantifier by spots
@@ -166,7 +165,7 @@ class BioProjectInfo:
         self.metadata_path = None
         self.rpm_map = None
         self.num_lambda_jobs = num_lambda_jobs
-        self.lambda_size = 3600  # default lambda size
+        self.lambda_size = 5400  # default lambda size
         self.num_conc_procs = num_conc_procs
         self.groups = [] if groups is None else groups
         self.jobs = [] if jobs is None else jobs  # only used in preprocessing stage
@@ -273,11 +272,10 @@ class BioProjectInfo:
         self.config.log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
         # non permutation test lambda(TODO: lambda[s]?)  always uses the 4 core 5400MB ram lambda
         lam_client.invoke(
-            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas:5400MBram',  # to get accepted by SNS policy
+            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
             InvocationType='Event',  # Asynchronous invocation
             Payload=json.dumps({
                 'mwas_id': mwas_id,
-                'mwas reason': 'block of statistical t-tests',
                 'bioproject_info': bioproject_info,
                 'link': link,
                 'job_window': 'full',  # empty implies all groups
@@ -292,12 +290,13 @@ class BioProjectInfo:
         for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
             self.config.log_print(f"dispatching lambda job {i + 1} for {self.name}")
             # Invoke the Lambda function
+            size_names = {900: "_small", 3600: "", 5400: "", 7200: "_large", 10240: "_large"}
+            extra = size_names[self.lambda_size]
             lam_client.invoke(
-                FunctionName=f'arn:aws:lambda:us-east-1:797308887321:function:mwas:{lambda_alias}',
+                FunctionName=f'arn:aws:lambda:us-east-1:797308887321:function:mwas{extra}',
                 InvocationType='Event',  # Asynchronous invocation
                 Payload=json.dumps({
                     'mwas_id': mwas_id,
-                    'mwas reason': 'block of statistical permutation tests',  # to get accepted by SNS policy
                     'bioproject_info': bioproject_info,
                     'link': link,
                     'job_window': job,
@@ -540,7 +539,6 @@ class BioProjectInfo:
         results_str = ''
         reusable_keys = {}
         for test in tests:
-            print(test)
             result = self.process_set_test(test, 'permutation-test', reusable_keys)
             if result is not None:
                 results_str += result
@@ -567,7 +565,8 @@ class BioProjectInfo:
                 continue
             if job_groups is not None:
                 start, end = job_groups[group]
-                sets_subset_df = metadata_df.iloc[start:end]  # note: this is correct. Checking correctness via the metadata csv will show it's off by 2 - that's due to indexing from 1 in csv, and counting the header
+                sets_subset_df = metadata_df.iloc[
+                                 start:end]  # note: this is correct. Checking correctness via the metadata csv will show it's off by 2 - that's due to indexing from 1 in csv, and counting the header
             else:
                 sets_subset_df = metadata_df
 
