@@ -27,8 +27,8 @@ main/tests/other_tests/__pycache__/
 main/condensing_conversion/__pycache__/
 main/tests/metadata_set_maker_tests/test_files/
 main/real_mwas_runs/
-main/v2/test*
-main/v2/__pycache__/
+main/code/test*
+main/code/__pycache__/
 main/utilities/readable_condensed_bioproject_metadata_csvs/
 main/lambda_stuff/lam_pack/
 main/lambda_stuff/deppack.zip
