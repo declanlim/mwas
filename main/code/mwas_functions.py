@@ -19,7 +19,7 @@ import numpy as np
 from scipy.stats import permutation_test, ttest_ind_from_stats
 
 # s3 constants
-DIR_SUFFIX = '/tmp/depp'  # '/tmp/' for deployment, '' for local testing
+DIR_SUFFIX = '/tmp/'  # '/tmp/' for deployment, '' for local testing
 S3_BUCKET_BOTO = 'serratus-biosamples'
 S3_METADATA_DIR_BOTO = 'condensed-bioproject-metadata'
 S3_OUTPUT_DIR_BOTO = 'mwas_data'

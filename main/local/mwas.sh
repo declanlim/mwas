@@ -367,18 +367,20 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
         report=$(jq '.' progress_report.json)
         printf '=%.0s' $(seq 1 $(tput cols))
         echo "MWAS PROGRESS REPORT:"
-        echo "Percent complete: $(echo $report | jq -r '.percent_complete' 2>/dev/null)"
-        echo "elapsed time: $(echo $report | jq -r '.elapsed_time' 2>/dev/null)"
-        echo "time remaining: $(echo $report | jq -r '.remaining_time' 2>/dev/null)"
+        echo "Status: $(echo $report | jq -r '.status' 2>/dev/null)"
+        echo "elapsed time: $(echo $report | jq -r '.time_elapsed' 2>/dev/null)"
         if [[ $3 == "-vp" || $3 == "--verbose-progress" ]]; then
             # verbose progress
-            echo "initial time estimate: $(echo $report | jq -r '.initial_time_estimate' 2>/dev/null)"
-            echo "initial number of tests estimate: $(echo $report | jq -r '.initial_num_tests' 2>/dev/null)"
-            echo "MWAS processing stage: $(echo $report | jq -r '.mwas_processing_stage' 2>/dev/null)"
-            echo "Number of tests completed: $(echo $report | jq -r '.num_tests_completed' 2>/dev/null)"
-            echo "Number of significant results found: $(echo $report | jq -r '.num_sig_results' 2>/dev/null)"
-            echo "Bioprojects processed: $(echo $report | jq -r '.bioprojects_processed' 2>/dev/null)"
-            echo "Number of bioprojects ignored: $(echo $report | jq -r '.bioprojects_ignored' 2>/dev/null)"
+            echo "Start time: $(echo $report | jq -r '.start_time' 2>/dev/null)"
+            echo "Number of aws lambdas: $(echo $report | jq -r '.num_lambdas_jobs' 2>/dev/null)"
+            echo "Number of aws lambdas completed: $(echo $report | jq -r '.num_jobs_completed' 2>/dev/null)"
+            echo "Number of permutation tests: $(echo $report | jq -r '.num_permutation_tests' 2>/dev/null)"
+            echo "total cost: $(echo $report | jq -r '.total_cost' 2>/dev/null)"
+            successes=$(echo $report | jq -r '.successes' 2>/dev/null)
+            fails=$(echo $report | jq -r '.fails' 2>/dev/null)
+            rate=$(echo "scale=2; $successes / ($successes + $fails) * 100" | bc)
+            echo "Success rate: ${rate}%"
+
         fi
         printf '=%.0s' $(seq 1 $(tput cols))
     fi

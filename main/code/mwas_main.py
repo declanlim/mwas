@@ -1,5 +1,4 @@
 """main function to run MWAS on the given data file, i.e. starting point"""
-import sys
 import uuid
 
 import psycopg2
@@ -10,9 +9,10 @@ import subprocess
 # globals
 DATE = time.asctime().replace(' ', '_').replace(':', '-')
 TEMP_LOCAL_BUCKET = None  # tbd when hash code is provided
-S3_METADATA_DIR = 's3://serratus-biosamples/condensed-bioproject-metadata'
-S3_OUTPUT_DIR = 's3://serratus-biosamples/mwas_data/'
+S3_MWAS_DATA = 'mwas-user-dump'
 CONFIG = Config()
+
+s3_client = boto3.client('s3')
 
 # sql constants
 SERRATUS_CONNECTION_INFO = {
@@ -85,6 +85,19 @@ def update_progress(status, num_bioprojects, num_lambda_jobs, num_permutation_te
 
 def s3_sync():
     """Sync the local s3 bucket with the s3 bucket"""
+    s3_client.upload_file(DIR_SUFFIX + 'result.txt', S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{OUTPUT_FILES_DIR}/result_{process_id}.txt")
+
+    try:
+        for root, dirs, files in os.walk(TEMP_LOCAL_BUCKET):
+            for file in files:
+                local_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_path, local_dir)
+                s3_path = os.path.join(s3_prefix, relative_path).replace("\\", "/")
+                s3_client.upload_file(local_path, s3_bucket, s3_path)
+        CONFIG.log_print(f"Synced s3 bucket: {s3_prefix}")
+    except Exception as e:
+        CONFIG.log_print(f"Error in syncing s3 bucket: {s3_prefix} - {e}", 0)
+
     process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}", shell=True)
     if process.returncode == 0:
         CONFIG.log_print(f"Synced s3 bucket: {S3_OUTPUT_DIR}")
@@ -246,126 +259,124 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     return num_bioprojects, total_lambda_jobs, total_perm_tests
 
 
-def main(args: list[str]) -> int | None | tuple[int, str]:
+def main(hash_code: str, flags: dict):
     """Main function to run MWAS on the given data file"""
-    num_args = len(args)
     time_start = time.time()
 
-    # Check if the correct number of arguments is provided
-    if num_args < 2 or args[1] in ('-h', '--help'):
-        return 1, "Usage: python mwas_general.py data_file.csv [flags]"
-    elif args[1].endswith('.csv'):
+    try:
+        global TEMP_LOCAL_BUCKET
 
-        # s3 storing
+        # we don't care if the hash dest already exists. we assume this was checked in presigned url lambda. So we don't worry here
+        # get csv from the hash dest
         try:
-            global TEMP_LOCAL_BUCKET
-
-            if '--s3' not in args:
-                hash_dest = DATE
-            else:
-                hash_dest = args[args.index('--s3') + 1]
-            # check if the hash_dest exists in our s3 bucket already (if it does, exit mwas)
-            process = subprocess.run(SHELL_PREFIX + f"s5cmd ls {S3_OUTPUT_DIR}{hash_dest}/", shell=True, stderr=subprocess.PIPE)
-            if not process.stderr:
-                # this implies we found something successfully via ls, so we should exit
-                return 0, 'This input has already been processed. Please refer to the s3 bucket for the output.'
-
-            # create local disk folder to sync with s3
-            TEMP_LOCAL_BUCKET = f"./{hash_dest}"
-            problematic_biopjs_file_actual = f"{TEMP_LOCAL_BUCKET}/{PROBLEMATIC_BIOPJS_FILE}"
-            preproc_log_file_actual = f"{TEMP_LOCAL_BUCKET}/{PREPROC_LOG_FILE}"
-            output_file_actual = f"{TEMP_LOCAL_BUCKET}/{OUTPUT_CSV_FILE}"
-            if os.path.exists(TEMP_LOCAL_BUCKET):
-                rmtree(TEMP_LOCAL_BUCKET)
-            os.mkdir(TEMP_LOCAL_BUCKET)
-            # make subfolders for outputs and logs
-            os.mkdir(f"{TEMP_LOCAL_BUCKET}/{OUTPUT_FILES_DIR}")
-            os.mkdir(f"{TEMP_LOCAL_BUCKET}/{PROC_LOG_FILES_DIR}")
-
-            # create the problematic bioprojects file and logger and progress.json
-            CONFIG.set_logger(preproc_log_file_actual)
-            CONFIG.set_log_level(0 if '--no-logging' in args else (1 if '--suppress-logging' in args else 2),
-                                 False if '--print-mode' in args else True)
-            with open(problematic_biopjs_file_actual, 'w') as f:
-                f.write('bioproject,reason\n')
-            update_progress('Starting', 0, 0, 0, 0, time_start, False)
-
-            # create the s3 bucket
-            process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}", shell=True)
-            if process.returncode == 0:
-                CONFIG.log_print(f"Created s3 bucket: {S3_OUTPUT_DIR}")
-            else:
-                CONFIG.log_print(f"Error in creating s3 bucket: {S3_OUTPUT_DIR}", 0)
-                return 1, 'could not create the s3 bucket'
+            s3_client.download_file(S3_MWAS_DATA, f"{hash_code}/input.csv", f"{hash_code}/input.csv")
         except Exception as e:
-            CONFIG.log_print(f"Error in setting s3 output directory: {e}", 0)
-            return 1, 'could not set s3 output directory'
+            CONFIG.log_print(f"Error in downloading input file: {e}", 0)
+            return 1, 'could not download the input file'
 
-        # set flags
+        # create local disk folder to sync with s3
+        TEMP_LOCAL_BUCKET = f"./{hash_code}"
+        problematic_biopjs_file_actual = f"{TEMP_LOCAL_BUCKET}/{PROBLEMATIC_BIOPJS_FILE}"
+        preproc_log_file_actual = f"{TEMP_LOCAL_BUCKET}/{PREPROC_LOG_FILE}"
+        if os.path.exists(TEMP_LOCAL_BUCKET):
+            rmtree(TEMP_LOCAL_BUCKET)
+        os.mkdir(TEMP_LOCAL_BUCKET)
+        # make subfolders for outputs and logs
+        os.mkdir(f"{TEMP_LOCAL_BUCKET}/{OUTPUT_FILES_DIR}")
+        os.mkdir(f"{TEMP_LOCAL_BUCKET}/{PROC_LOG_FILES_DIR}")
 
-        if '--already-normalized' in args:  # TODO: test
-            CONFIG.ALREADY_NORMALIZED = 1
-        if '--p-value-threshold' in args:
-            try:
-                CONFIG.P_VALUE_THRESHOLD = float(args[args.index('--p-value-threshold') + 1])
-            except Exception as e:
-                CONFIG.log_print(f"Error in setting p-value threshold: {e}", 0)
-                return 1
-        if '--group-nonzero-threshold' in args:
-            try:
-                CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(args[args.index('--group-nonzero-threshold') + 1])
-            except Exception as e:
-                CONFIG.log_print(f"Error in setting group nonzeros threshold: {e}", 0)
-                return 1
-        if '--explicit-zeros' in args or '--explicit-zeroes' in args:
-            CONFIG.IMPLICIT_ZEROS = 0
-            if CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD < 4:
-                CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 4
+        # create the problematic bioprojects file and logger and progress.json
+        CONFIG.set_logger(preproc_log_file_actual)
+        CONFIG.set_log_level(0 if '--no-logging' in flags else (1 if '--suppress-logging' in flags else 2),
+                             False if '--print-mode' in flags else True)
+        with open(problematic_biopjs_file_actual, 'w') as f:
+            f.write('bioproject,reason\n')
+        update_progress('Starting', 0, 0, 0, 0, time_start, False)
 
-        try:  # reading the input file
-            input_df = pd.read_csv(args[1])  # arg1 is a file path
-            # rename group and quantifier columns to standard names, and also save original names
-            group_by, quantifying_by = input_df.columns[1], input_df.columns[2]
-            input_df.rename(columns={
-                input_df.columns[0]: 'run', input_df.columns[1]: 'group', input_df.columns[2]: 'quantifier'
-            }, inplace=True)
-
-            # assume it has three columns: run, group, quantifier. And the group and quantifier columns have special names
-            if len(input_df.columns) != 3:
-                CONFIG.log_print("Data file must have three columns in this order: <run>, <group>, <quantifier>", 0)
-                return 1, 'invalid data file'
-
-            # attempt to correct column types so the next if block doesn't exit us
-            input_df['run'] = input_df['run'].astype(str)
-            input_df['group'] = input_df['group'].astype(str)
-            input_df['quantifier'] = pd.to_numeric(input_df['quantifier'], errors='coerce')
-
-            # check if run and group contain string values and quantifier contains numeric values
-            if (input_df['run'].dtype != 'object' or input_df['group'].dtype != 'object'
-                    or input_df['quantifier'].dtype not in ('float64', 'int64')):
-                CONFIG.log_print("run and group column must contain string values, and quantifier column must contain numeric values", 0)
-                return 1
-        except FileNotFoundError:
-            CONFIG.log_print("File not found", 0)
-            return 1, 'file not found'
-
-        # RUN MWAS
-        CONFIG.log_print("RUNNING MWAS...", 0)
-        num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start, hash_dest)
-        CONFIG.log_print(f"Time taken: {time.time() - time_start} seconds", 0)
-
-        update_progress('Processing', num_bioprojects, num_lambda_jobs, num_permutation_tests, 0, time_start)
-
-        # remove the local copy of the s3 bucket
-        # rmtree(TEMP_LOCAL_BUCKET)  problem: it tries removing the log file, which it cannot do while using it
-        print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
-
-        return 0, f'Preprocessing completed in {time.time() - time_start} seconds'
-    else:
-        CONFIG.log_print("Invalid arguments", 0)
-        return 1, 'invalid arguments'
+        # assume the s3 bucket exists, otherwise we wouldn't have reached this line
 
 
-if __name__ == '__main__':
-    exit_code = main(sys.argv)
-    sys.exit(exit_code)
+    except Exception as e:
+        CONFIG.log_print(f"Error in setting s3 output directory: {e}", 0)
+        return 1, 'could not set s3 output directory'
+
+    # set flags
+
+    if '--already-normalized' in flags:  # TODO: test
+        CONFIG.ALREADY_NORMALIZED = flags['--already-normalized']
+    if '--p-value-threshold' in flags:
+        try:
+            CONFIG.P_VALUE_THRESHOLD = float(flags['--p-value-threshold'])
+        except Exception as e:
+            CONFIG.log_print(f"Error in setting p-value threshold: {e}", 0)
+            return 1
+    if '--group-nonzero-threshold' in flags:
+        try:
+            CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(flags['--group-nonzero-threshold'])
+        except Exception as e:
+            CONFIG.log_print(f"Error in setting group nonzeros threshold: {e}", 0)
+            return 1
+    if '--explicit-zeros' in flags or '--explicit-zeroes' in flags:
+        CONFIG.IMPLICIT_ZEROS = 0
+        if CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD < 4:
+            CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 4
+
+    try:  # reading the input file
+        input_df = pd.read_csv(f"{hash_code}/input.csv")
+        # rename group and quantifier columns to standard names, and also save original names
+        group_by, quantifying_by = input_df.columns[1], input_df.columns[2]
+        input_df.rename(columns={
+            input_df.columns[0]: 'run', input_df.columns[1]: 'group', input_df.columns[2]: 'quantifier'
+        }, inplace=True)
+
+        # assume it has three columns: run, group, quantifier. And the group and quantifier columns have special names
+        if len(input_df.columns) != 3:
+            CONFIG.log_print("Data file must have three columns in this order: <run>, <group>, <quantifier>", 0)
+            return 1, 'invalid data file'
+
+        # attempt to correct column types so the next if block doesn't exit us
+        input_df['run'] = input_df['run'].astype(str)
+        input_df['group'] = input_df['group'].astype(str)
+        input_df['quantifier'] = pd.to_numeric(input_df['quantifier'], errors='coerce')
+
+        # check if run and group contain string values and quantifier contains numeric values
+        if (input_df['run'].dtype != 'object' or input_df['group'].dtype != 'object'
+                or input_df['quantifier'].dtype not in ('float64', 'int64')):
+            CONFIG.log_print("run and group column must contain string values, and quantifier column must contain numeric values", 0)
+            return 1
+    except FileNotFoundError:
+        CONFIG.log_print("File not found", 0)
+        return 1, 'file not found'
+
+    # RUN MWAS
+    CONFIG.log_print("RUNNING MWAS...", 0)
+    num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start, hash_code)
+    CONFIG.log_print(f"Time taken: {time.time() - time_start} seconds", 0)
+
+    update_progress('Processing', num_bioprojects, num_lambda_jobs, num_permutation_tests, 0, time_start)
+
+    # remove the local copy of the s3 bucket
+    # rmtree(TEMP_LOCAL_BUCKET)  problem: it tries removing the log file, which it cannot do while using it
+    print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
+
+    return 0, f'Preprocessing completed in {time.time() - time_start} seconds'
+
+
+def lambda_handler(event, context):
+    """Main function to run MWAS on the given data file.
+    should have flags dict and hash"""
+    print(context)
+
+    try:
+        hash_code = event['hash']
+        flags = event['flags']
+    except KeyError:
+        return {
+            'statusCode': 400,
+            'message': 'hash and flags must be provided in the event'
+        }
+    ret = main(hash_code, flags)
+    return {
+        'statusCode': 200 if ret[0] == 0 else 500,
+        'message': ret[1]
+    }

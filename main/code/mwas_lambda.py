@@ -7,8 +7,9 @@ from mwas_functions import *
 CONFIG = Config()
 s3 = boto3.client('s3')
 
+
 def lambda_handler(event: dict, context):
-    """Lambda handler for MWAS"""
+    """Lambda handler for MWAS testing functions"""
 
     start_time = time.perf_counter()
     size = context.memory_limit_in_mb

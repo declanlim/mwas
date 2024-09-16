@@ -9,8 +9,7 @@
 # - provide a flag to download results from s3, and so, if specified, download results from s3 to local machine (results include the mwas_output as well as the log file)
 
 SERVER_URL="http://ec2-75-101-194-81.compute-1.amazonaws.com:5000/run_mwas"
-S3_BUCKET="s3://serratus-biosamples/mwas_data/"
-CURL_SRC="http://serratus-biosamples.s3.amazonaws.com/mwas_data/"
+S3_BUCKET="s3://mwas-user-dump/"
 RESULTS_DIR="mwas_results_folder_"
 # IMPORTANT: the arguments should be able to come in any order so we can use $num, but we can do arg then arg + 1 later for things like -r [input_file] since that DOES need to be ordered
 
@@ -295,22 +294,49 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     echo "Preparing request to send to MWAS server..."
     # get MWAS flags
     FLAGS="${@:3}"
-
-    # jsonify the input file to send to the server (it will be reconstructed as a csv on the server)
+    FLAGS_HASH=$(echo -n "$FLAGS" | sha256sum | awk '{ print $1 }')
+    # get CSV file hash
     CSV_FILE=$2
-    csvjson $CSV_FILE | jq . > request.json
-    # create JSON object with data and flags
-    JSON_DATA=$(jq -n --arg flags "$FLAGS" --arg data "$(cat request.json)" '{data: $data, flags: $flags}')
-    rm request.json
+    FILE_HASH=$(sha256sum $CSV_FILE | awk '{ print $1 }')
+    # hash value used to reference this mwas run
+    hash=$(echo -n "${FILE_HASH}${FLAGS_HASH}" | sha256sum | awk '{ print $1 }')
 
-    # hash the JSON_DATA to check if the request has already been made and predetermine the response's location
-    hash=$(echo -n "$JSON_DATA" | md5sum | awk '{ print $1 }')
-    JSON_DATA=$(echo $JSON_DATA | jq --arg hash "$hash" '. + {dest: $hash}')
+    # get presigned url for the input file
+    API_GATEWAY_URL="https://6fnk2z2hcj.execute-api.us-east-1.amazonaws.com"
+    # needs attributes bucket_name and hash
+    RESPONSE=$(curl -X POST $API_GATEWAY_URL/presigned_url_generator \
+             -H "Content-Type: application/json" \
+             -d "{\"bucket_name\": \"$S3_BUCKET\", \"hash\": \"$hash\"}")
+    # check status
+    STATUS=$(echo $RESPONSE | jq -r '.status')
+    if [[ $STATUS != 200 ]]; then
+        # read error message in body
+        ERROR=$(echo $RESPONSE | jq -r '.message')
+        echo "Error: $ERROR"
+        exit 1
+    fi
+
+    PRESIGNED_URL=$(echo $RESPONSE | jq -r '.presigned_url')
+    HASH=$(echo $RESPONSE | jq -r '.hash')
+    # verify that the hash is the same as the one we calculated
+    if [[ $HASH != $hash ]]; then
+        echo "Error: Hashes do not match"
+        exit 1
+    fi
 
     echo "================================"
     echo "      MWAS SESSION CODE:"
     echo "$hash"
     echo "================================"
+
+    # upload input file to s3 via curl
+    curl -v --upload-file $CSV_FILE $PRESIGNED_URL
+    # check if the file was uploaded successfully
+    if [[ $? -ne 0 ]]; then
+        echo "Error: There was an issue uploading the input file to s3"
+        exit 1
+    fi
+
 
     # set up directory to store results
     results_dir="$RESULTS_DIR$hash"
@@ -367,18 +393,20 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
         report=$(jq '.' progress_report.json)
         printf '=%.0s' $(seq 1 $(tput cols))
         echo "MWAS PROGRESS REPORT:"
-        echo "Percent complete: $(echo $report | jq -r '.percent_complete' 2>/dev/null)"
-        echo "elapsed time: $(echo $report | jq -r '.elapsed_time' 2>/dev/null)"
-        echo "time remaining: $(echo $report | jq -r '.remaining_time' 2>/dev/null)"
+        echo "Status: $(echo $report | jq -r '.status' 2>/dev/null)"
+        echo "elapsed time: $(echo $report | jq -r '.time_elapsed' 2>/dev/null)"
         if [[ $3 == "-vp" || $3 == "--verbose-progress" ]]; then
             # verbose progress
-            echo "initial time estimate: $(echo $report | jq -r '.initial_time_estimate' 2>/dev/null)"
-            echo "initial number of tests estimate: $(echo $report | jq -r '.initial_num_tests' 2>/dev/null)"
-            echo "MWAS processing stage: $(echo $report | jq -r '.mwas_processing_stage' 2>/dev/null)"
-            echo "Number of tests completed: $(echo $report | jq -r '.num_tests_completed' 2>/dev/null)"
-            echo "Number of significant results found: $(echo $report | jq -r '.num_sig_results' 2>/dev/null)"
-            echo "Bioprojects processed: $(echo $report | jq -r '.bioprojects_processed' 2>/dev/null)"
-            echo "Number of bioprojects ignored: $(echo $report | jq -r '.bioprojects_ignored' 2>/dev/null)"
+            echo "Start time: $(echo $report | jq -r '.start_time' 2>/dev/null)"
+            echo "Number of aws lambdas: $(echo $report | jq -r '.num_lambdas_jobs' 2>/dev/null)"
+            echo "Number of aws lambdas completed: $(echo $report | jq -r '.num_jobs_completed' 2>/dev/null)"
+            echo "Number of permutation tests: $(echo $report | jq -r '.num_permutation_tests' 2>/dev/null)"
+            echo "total cost: $(echo $report | jq -r '.total_cost' 2>/dev/null)"
+            successes=$(echo $report | jq -r '.successes' 2>/dev/null)
+            fails=$(echo $report | jq -r '.fails' 2>/dev/null)
+            rate=$(echo "scale=2; $successes / ($successes + $fails) * 100" | bc)
+            echo "Success rate: ${rate}%"
+
         fi
         printf '=%.0s' $(seq 1 $(tput cols))
     fi
