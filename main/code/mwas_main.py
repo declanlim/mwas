@@ -1,15 +1,16 @@
 """main function to run MWAS on the given data file, i.e. starting point"""
+import os
+import time
 import uuid
-
 import psycopg2
 from shutil import rmtree
-from mwas_functions import *
-import subprocess
+from mwas_functions_for_preprocessing import *
 
 # globals
 DATE = time.asctime().replace(' ', '_').replace(':', '-')
 TEMP_LOCAL_BUCKET = None  # tbd when hash code is provided
 S3_MWAS_DATA = 'mwas-user-dump'
+HASH_LINK = "default"
 CONFIG = Config()
 
 s3_client = boto3.client('s3')
@@ -85,24 +86,13 @@ def update_progress(status, num_bioprojects, num_lambda_jobs, num_permutation_te
 
 def s3_sync():
     """Sync the local s3 bucket with the s3 bucket"""
-    s3_client.upload_file(DIR_SUFFIX + 'result.txt', S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{OUTPUT_FILES_DIR}/result_{process_id}.txt")
-
     try:
-        for root, dirs, files in os.walk(TEMP_LOCAL_BUCKET):
-            for file in files:
-                local_path = os.path.join(root, file)
-                relative_path = os.path.relpath(local_path, local_dir)
-                s3_path = os.path.join(s3_prefix, relative_path).replace("\\", "/")
-                s3_client.upload_file(local_path, s3_bucket, s3_path)
-        CONFIG.log_print(f"Synced s3 bucket: {s3_prefix}")
+        file_list = os.listdir(TEMP_LOCAL_BUCKET)
+        for file in file_list:
+            s3_client.upload_file(f"{TEMP_LOCAL_BUCKET}/{file}", S3_MWAS_DATA, f"{HASH_LINK}/{file}")
+        CONFIG.log_print(f"Synced s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}")
     except Exception as e:
-        CONFIG.log_print(f"Error in syncing s3 bucket: {s3_prefix} - {e}", 0)
-
-    process = subprocess.run(SHELL_PREFIX + f"s5cmd sync {TEMP_LOCAL_BUCKET} {S3_OUTPUT_DIR}", shell=True)
-    if process.returncode == 0:
-        CONFIG.log_print(f"Synced s3 bucket: {S3_OUTPUT_DIR}")
-    else:
-        CONFIG.log_print(f"Error in syncing s3 bucket: {S3_OUTPUT_DIR}", 0)
+        CONFIG.log_print(f"Error in syncing s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}: {e}", 0)
 
 
 def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd.DataFrame | None:
@@ -126,7 +116,7 @@ def get_table_via_sql_query(connection: dict, query: str, accs: list[str]) -> pd
             return None
 
 
-def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) -> tuple[int, int, int] | None:
+def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int, int] | None:
     """Run MWAS on the given data file
     input_info is a tuple of the group and quantifier column names
     storage will usually be the tmpfs mount point mount_tmpfs
@@ -240,7 +230,7 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     # DISPATCH ALL LAMBDA JOBS
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, hash_dest, LAMBDA_CLIENT, total_lambda_jobs)
+        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, HASH_LINK, LAMBDA_CLIENT, total_lambda_jobs)
         del bioproject_obj
 
     # # DISPATCH THE POSTPROCESSING LAMBDA (also acts as dynamodb listener until 100 seconds or all lambdas are done)
@@ -252,14 +242,14 @@ def preprocessing(data_file: pd.DataFrame, start_time: float, hash_dest: str) ->
     #         'wait_time': 100,  # seconds until the post proc. stops waiting for new messages and begins post processing
     #         'check_interval': 1,  # seconds between each check for new messages
     #         'expected_jobs': total_lambda_jobs,  # VERY important. This is how the post proc. knows how many items from dynamodb it needs
-    #         'link': hash_dest,
+    #         'link': HASH_LINK,
     #     })
     # )
 
     return num_bioprojects, total_lambda_jobs, total_perm_tests
 
 
-def main(hash_code: str, flags: dict):
+def main(flags: dict):
     """Main function to run MWAS on the given data file"""
     time_start = time.time()
 
@@ -269,13 +259,13 @@ def main(hash_code: str, flags: dict):
         # we don't care if the hash dest already exists. we assume this was checked in presigned url lambda. So we don't worry here
         # get csv from the hash dest
         try:
-            s3_client.download_file(S3_MWAS_DATA, f"{hash_code}/input.csv", f"{hash_code}/input.csv")
+            s3_client.download_file(S3_MWAS_DATA, f"{HASH_LINK}/input.csv", f"{HASH_LINK}/input.csv")
         except Exception as e:
             CONFIG.log_print(f"Error in downloading input file: {e}", 0)
             return 1, 'could not download the input file'
 
         # create local disk folder to sync with s3
-        TEMP_LOCAL_BUCKET = f"./{hash_code}"
+        TEMP_LOCAL_BUCKET = f"./{HASH_LINK}"
         problematic_biopjs_file_actual = f"{TEMP_LOCAL_BUCKET}/{PROBLEMATIC_BIOPJS_FILE}"
         preproc_log_file_actual = f"{TEMP_LOCAL_BUCKET}/{PREPROC_LOG_FILE}"
         if os.path.exists(TEMP_LOCAL_BUCKET):
@@ -294,7 +284,6 @@ def main(hash_code: str, flags: dict):
         update_progress('Starting', 0, 0, 0, 0, time_start, False)
 
         # assume the s3 bucket exists, otherwise we wouldn't have reached this line
-
 
     except Exception as e:
         CONFIG.log_print(f"Error in setting s3 output directory: {e}", 0)
@@ -322,7 +311,7 @@ def main(hash_code: str, flags: dict):
             CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 4
 
     try:  # reading the input file
-        input_df = pd.read_csv(f"{hash_code}/input.csv")
+        input_df = pd.read_csv(f"{HASH_LINK}/input.csv")
         # rename group and quantifier columns to standard names, and also save original names
         group_by, quantifying_by = input_df.columns[1], input_df.columns[2]
         input_df.rename(columns={
@@ -350,14 +339,14 @@ def main(hash_code: str, flags: dict):
 
     # RUN MWAS
     CONFIG.log_print("RUNNING MWAS...", 0)
-    num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start, hash_code)
+    num_bioprojects, num_lambda_jobs, num_permutation_tests = preprocessing(input_df, time_start)
     CONFIG.log_print(f"Time taken: {time.time() - time_start} seconds", 0)
 
     update_progress('Processing', num_bioprojects, num_lambda_jobs, num_permutation_tests, 0, time_start)
 
     # remove the local copy of the s3 bucket
     # rmtree(TEMP_LOCAL_BUCKET)  problem: it tries removing the log file, which it cannot do while using it
-    print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
+    # print(f"Removed local copy of s3 bucket: {TEMP_LOCAL_BUCKET}")
 
     return 0, f'Preprocessing completed in {time.time() - time_start} seconds'
 
@@ -368,14 +357,16 @@ def lambda_handler(event, context):
     print(context)
 
     try:
-        hash_code = event['hash']
+        global HASH_LINK
+        HASH_LINK = event['hash']
         flags = event['flags']
     except KeyError:
         return {
             'statusCode': 400,
             'message': 'hash and flags must be provided in the event'
         }
-    ret = main(hash_code, flags)
+    ret = main(flags)
+    print(f"finishe with: {ret}")
     return {
         'statusCode': 200 if ret[0] == 0 else 500,
         'message': ret[1]
