@@ -105,7 +105,6 @@ OPTIONS: (used with -g, --get)
 MWAS_FLAGS: (used with -r, --run)
   --suppress-logging        Suppress logging (default is verbose logging)
   --no-logging              No logging (overrides --suppress-logging)
-  --t-test-only             Only run t-tests (not recommended)
   --already-normalized      Input file quantifications are already normalized
                             (default is to normalize using spots from serratus's
                             logan database)
@@ -119,8 +118,6 @@ MWAS_FLAGS: (used with -r, --run)
                             Set the minimum number of non-zero quantifications
                             in a group for it to be included in the analysis
                             (default is 3; useless when --explicit-zeros is set)
-  --performance-stats       Include performance statistics in the log (default
-                            is to exclude them; recommended developer use only)
 
 MWAS repository: <https://github.com/declanlim/mwas_rfam>
 
@@ -213,9 +210,6 @@ MWAS_FLAGS: (used with -r, --run)
   --no-logging
   No logging (overrides --suppress-logging)
 
-  --t-test-only
-  Only run t-tests (not recommended)
-
   --already-normalized
   Input file quantifications are already
   normalized (default is to normalize using
@@ -236,11 +230,6 @@ MWAS_FLAGS: (used with -r, --run)
   included in the analysis (default is 3;
   useless when --explicit-zeros is set)
 
-  --performance-stats
-  Include performance statistics in the log
-  (default is to exclude them;
-  recommended developer use only)
-
 MWAS repository:
 <https://github.com/declanlim/mwas_rfam>
 
@@ -253,7 +242,7 @@ elif [[ $1 == "-ca" || $1 == "--clean-all" ]]; then
     echo "All downloaded files and directories have been removed."
     exit 0
 elif [[ $1 == "-r" || $1 == "--run" ]]; then
-    # check dependencies: jq, csvjson (from csvkit), and prompt user to install if not found
+    # check dependencies: jq, and prompt user to install if not found
     if ! command -v curl &> /dev/null; then
         echo "Error: curl is not installed"
         echo "Please install curl by running 'brew install curl' or 'sudo apt-get install curl'"
@@ -262,11 +251,6 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     if ! command -v jq &> /dev/null; then
         echo "Error: jq is not installed"
         echo "Please install jq by running 'sudo apt install jq'"
-        exit 1
-    fi
-    if ! command -v csvjson &> /dev/null; then
-        echo "Error: csvjson is not installed"
-        echo "Please install csvjson by running 'sudo apt install csvkit'"
         exit 1
     fi
 
@@ -308,7 +292,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
              -H "Content-Type: application/json" \
              -d "{\"bucket_name\": \"$S3_BUCKET\", \"hash\": \"$hash\"}")
     # check status
-    STATUS=$(echo $RESPONSE | jq -r '.status')
+    STATUS=$(echo $RESPONSE | jq -r '.statusCode')
     if [[ $STATUS != 200 ]]; then
         # read error message in body
         ERROR=$(echo $RESPONSE | jq -r '.message')
@@ -324,12 +308,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
         exit 1
     fi
 
-    echo "================================"
-    echo "      MWAS SESSION CODE:"
-    echo "$hash"
-    echo "================================"
-
-    # upload input file to s3 via curl
+    # using the presigned url, upload the file (it will go to the correct folder in s3)
     curl -v --upload-file $CSV_FILE $PRESIGNED_URL
     # check if the file was uploaded successfully
     if [[ $? -ne 0 ]]; then
@@ -337,12 +316,47 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
         exit 1
     fi
 
-
     # set up directory to store results
     results_dir="$RESULTS_DIR$hash"
     if [[ ! -d $results_dir ]]; then
         mkdir $results_dir
     fi
+
+    # send API request to start MWAS
+    # data should be have a hash attribute and flags attribute, where flags is a dict of the flags and their values (e.g. true or false or a value for thinsg like p-value setting)
+    JSON_DATA="{\"hash\": \"$hash\", \"flags\": {"
+    # if flags is empty
+    if [[ ${#FLAGS} -eq 0 ]]; then
+        JSON_DATA="$JSON_DATA}}"
+    else
+      for flag in $FLAGS; do
+          if [[ $flag == "--suppress-logging" ]]; then
+              JSON_DATA="$JSON_DATA\"suppress_logging\": 1,"
+          elif [[ $flag == "--no-logging" ]]; then
+              JSON_DATA="$JSON_DATA\"suppress_logging\": 1,"
+          elif [[ $flag == "--already-normalized" ]]; then
+              JSON_DATA="$JSON_DATA\"already_normalized\": 1,"
+          elif [[ $flag == "--explicit-zeros" ]]; then
+              JSON_DATA="$JSON_DATA\"explicit_zeros\": 1,"
+          elif [[ $flag == "--p-value-threshold" ]]; then
+              JSON_DATA="$JSON_DATA\"p_value_threshold\": ${FLAGS[$i+1]},"
+          elif [[ $flag == "--group-nonzero-threshold" ]]; then
+              JSON_DATA="$JSON_DATA\"group_nonzero_threshold\": ${FLAGS[$i+1]},"
+          fi
+      done
+      JSON_DATA="${JSON_DATA::-1}}}"  # remove last comma and close the dict
+    fi
+
+    RESPONSE=$(curl -X POST $API_GATEWAY_URL/presigned_url_generator \
+             -H "Content-Type: application/json" \
+             -d "$JSON_DATA")
+
+    echo "================================"
+    echo "      MWAS SESSION CODE:"
+    echo "$hash"
+    echo "================================"
+
+
 
     # send request to server to run MWAS (how to catch response?
     response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)

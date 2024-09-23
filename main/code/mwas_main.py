@@ -366,7 +366,7 @@ def lambda_handler(event, context):
             'message': 'hash and flags must be provided in the event'
         }
     ret = main(flags)
-    print(f"finishe with: {ret}")
+    print(f"finished with: {ret}")
     return {
         'statusCode': 200 if ret[0] == 0 else 500,
         'message': ret[1]

@@ -28,16 +28,19 @@ def lambda_handler(event, context):
         except Exception as e:
             print("File does not exist yet. This is good. ", e)
 
+        # creat subfolder in s3
+        s3_client.put_object(Bucket=bucket_name, Key=hash_value + '/')
+
         presigned_url = s3_client.generate_presigned_url(
-            'put_object', Params={'Bucket': bucket_name, 'Key': hash_value}, ExpiresIn=300)
-        exit_handler({
+            'put_object', Params={'Bucket': bucket_name, 'Key': f"{hash_value}/input.csv"}, ExpiresIn=300)
+        return exit_handler({
             'statusCode': 200,
             'presigned_url': presigned_url,
             'hash': hash_value
         })
 
     except Exception as e:
-        exit_handler({
+        return exit_handler({
             'statusCode': 500,
             'message': f'Error in getting hash and bucket_name from event. {e}'
         })
