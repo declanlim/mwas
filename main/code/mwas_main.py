@@ -256,14 +256,6 @@ def main(flags: dict):
     try:
         global TEMP_LOCAL_BUCKET
 
-        # we don't care if the hash dest already exists. we assume this was checked in presigned url lambda. So we don't worry here
-        # get csv from the hash dest
-        try:
-            s3_client.download_file(S3_MWAS_DATA, f"{HASH_LINK}/input.csv", f"{HASH_LINK}/input.csv")
-        except Exception as e:
-            CONFIG.log_print(f"Error in downloading input file: {e}", 0)
-            return 1, 'could not download the input file'
-
         # create local disk folder to sync with s3
         TEMP_LOCAL_BUCKET = f"./{HASH_LINK}"
         problematic_biopjs_file_actual = f"{TEMP_LOCAL_BUCKET}/{PROBLEMATIC_BIOPJS_FILE}"
@@ -274,6 +266,14 @@ def main(flags: dict):
         # make subfolders for outputs and logs
         os.mkdir(f"{TEMP_LOCAL_BUCKET}/{OUTPUT_FILES_DIR}")
         os.mkdir(f"{TEMP_LOCAL_BUCKET}/{PROC_LOG_FILES_DIR}")
+
+        # we don't care if the hash dest already exists. we assume this was checked in presigned url lambda. So we don't worry here
+        # get csv from the hash dest
+        try:
+            s3_client.download_file(S3_MWAS_DATA, f"{HASH_LINK}/input.csv", f"{TEMP_LOCAL_BUCKET}/input.csv")
+        except Exception as e:
+            CONFIG.log_print(f"Error in downloading input file: {e}", 0)
+            return 1, 'could not download the input file'
 
         # create the problematic bioprojects file and logger and progress.json
         CONFIG.set_logger(preproc_log_file_actual)

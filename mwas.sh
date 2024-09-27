@@ -119,7 +119,7 @@ MWAS_FLAGS: (used with -r, --run)
                             in a group for it to be included in the analysis
                             (default is 3; useless when --explicit-zeros is set)
 
-MWAS repository: <https://github.com/declanlim/mwas_rfam>
+MWAS repository: <https://github.com/declanlim/mwas>
 
 EOF
     else
@@ -231,7 +231,7 @@ MWAS_FLAGS: (used with -r, --run)
   useless when --explicit-zeros is set)
 
 MWAS repository:
-<https://github.com/declanlim/mwas_rfam>
+<https://github.com/declanlim/mwas>
 
 EOF
     fi
