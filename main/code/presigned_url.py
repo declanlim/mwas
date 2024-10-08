@@ -20,8 +20,16 @@ def lambda_handler(event, context):
         bucket_name = body['bucket_name']
         # check if this hashed folder already exists in s3
         try:
-            s3_client.head_object(Bucket=bucket_name, Key=hash_value)
-            exit_handler({
+            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=hash_value, MaxKeys=1)
+            folder_exists = 'Contents' in response and len(response['Contents']) > 0
+            if not folder_exists:
+                raise ValueError("this folder does not exist")
+
+            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=hash_value + '/progress_report.json', MaxKeys=1)
+            mwas_started = 'Contents' in response and len(response['Contents']) > 0
+            if not mwas_started:
+                raise ValueError("this folder exists but MWAS hasn't started yet")
+            return exit_handler({
                 'statusCode': 500,
                 'message': 'File already exists in S3'
             })

@@ -16,7 +16,7 @@ import pandas as pd
 DIR_SUFFIX = '/tmp/'  # '/tmp/' for deployment, '' for local testing
 S3_BUCKET_BOTO = 'serratus-biosamples'
 S3_METADATA_DIR_BOTO = 'condensed-bioproject-metadata'
-S3_OUTPUT_DIR_BOTO = 'mwas_data'
+S3_OUTPUT_DIR_BOTO = 'mwas-user-dump'
 MAIN_DF_PICKLE = 'temp_main_df.pickle'
 
 # file constants

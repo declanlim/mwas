@@ -88,8 +88,16 @@ def s3_sync():
     """Sync the local s3 bucket with the s3 bucket"""
     try:
         file_list = os.listdir(TEMP_LOCAL_BUCKET)
+        CONFIG.log_print(file_list)
         for file in file_list:
-            s3_client.upload_file(f"{TEMP_LOCAL_BUCKET}/{file}", S3_MWAS_DATA, f"{HASH_LINK}/{file}")
+            CONFIG.log_print(file)
+            if '.' in file:  # file
+                s3_client.upload_file(f"{TEMP_LOCAL_BUCKET}/{file}", S3_MWAS_DATA, f"{HASH_LINK}/{file}")
+                CONFIG.log_print(f"Uploaded {file} to s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}")
+            else:
+                s3_path = f"{HASH_LINK}/{file}"
+                s3_client.put_object(Bucket=S3_MWAS_DATA, Key=s3_path)
+                CONFIG.log_print(f"made s3 folder: {S3_MWAS_DATA}/{s3_path}")
         CONFIG.log_print(f"Synced s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}")
     except Exception as e:
         CONFIG.log_print(f"Error in syncing s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}: {e}", 0)
@@ -233,19 +241,6 @@ def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int,
         bioproject_obj.dispatch_all_lambda_jobs(mwas_id, HASH_LINK, LAMBDA_CLIENT, total_lambda_jobs)
         del bioproject_obj
 
-    # # DISPATCH THE POSTPROCESSING LAMBDA (also acts as dynamodb listener until 100 seconds or all lambdas are done)
-    # LAMBDA_CLIENT.invoke(
-    #     FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_post',  # to get accepted by SNS policy
-    #     InvocationType='Event',  # Asynchronous invocation
-    #     Payload=json.dumps({
-    #         'mwas_id': mwas_id,
-    #         'wait_time': 100,  # seconds until the post proc. stops waiting for new messages and begins post processing
-    #         'check_interval': 1,  # seconds between each check for new messages
-    #         'expected_jobs': total_lambda_jobs,  # VERY important. This is how the post proc. knows how many items from dynamodb it needs
-    #         'link': HASH_LINK,
-    #     })
-    # )
-
     return num_bioprojects, total_lambda_jobs, total_perm_tests
 
 
@@ -257,12 +252,11 @@ def main(flags: dict):
         global TEMP_LOCAL_BUCKET
 
         # create local disk folder to sync with s3
-        TEMP_LOCAL_BUCKET = f"./{HASH_LINK}"
+        uid = str(uuid.uuid4())
+        TEMP_LOCAL_BUCKET = f"{DIR_SUFFIX}{uid}"
+        os.mkdir(TEMP_LOCAL_BUCKET)
         problematic_biopjs_file_actual = f"{TEMP_LOCAL_BUCKET}/{PROBLEMATIC_BIOPJS_FILE}"
         preproc_log_file_actual = f"{TEMP_LOCAL_BUCKET}/{PREPROC_LOG_FILE}"
-        if os.path.exists(TEMP_LOCAL_BUCKET):
-            rmtree(TEMP_LOCAL_BUCKET)
-        os.mkdir(TEMP_LOCAL_BUCKET)
         # make subfolders for outputs and logs
         os.mkdir(f"{TEMP_LOCAL_BUCKET}/{OUTPUT_FILES_DIR}")
         os.mkdir(f"{TEMP_LOCAL_BUCKET}/{PROC_LOG_FILES_DIR}")
@@ -274,6 +268,14 @@ def main(flags: dict):
         except Exception as e:
             CONFIG.log_print(f"Error in downloading input file: {e}", 0)
             return 1, 'could not download the input file'
+        # scan TEMP_LOCAL_BUCKET for file
+        actual_input_file = ""
+        for file in os.listdir(TEMP_LOCAL_BUCKET):
+            if 'input.csv' in file:
+                actual_input_file = file
+        if not actual_input_file:
+            CONFIG.log_print(f"Error in downloading input file: there was no input.csv found...", 0)
+            return 1, 'file not found'
 
         # create the problematic bioprojects file and logger and progress.json
         CONFIG.set_logger(preproc_log_file_actual)
@@ -311,7 +313,7 @@ def main(flags: dict):
             CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 4
 
     try:  # reading the input file
-        input_df = pd.read_csv(f"{HASH_LINK}/input.csv")
+        input_df = pd.read_csv(f"{TEMP_LOCAL_BUCKET}/{actual_input_file}")
         # rename group and quantifier columns to standard names, and also save original names
         group_by, quantifying_by = input_df.columns[1], input_df.columns[2]
         input_df.rename(columns={

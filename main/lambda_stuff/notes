@@ -33,4 +33,9 @@ aws s3 cp deppack.zip s3://serratus-biosamples/mwas_lambda_zips/deppack.zip
 
 for deppack_pre, don't install scipy, instead, install psycopg2-binary
 pip install --platform manylinux2014_x86_64 --target=. --implementation cp --python-version 3.12 --only-binary=:all: --upgrade psycopg2-binary==2.9.9
+zip -r ../deppack_pre.zip .
 aws s3 cp deppack_pre.zip s3://serratus-biosamples/mwas_lambda_zips/deppack_pre.zip
+
+
+#TODO: preprocessing lambda doesn't upload files during s3_sync even though it runs without error.
+# another error: no permission for lambda to invoke lamdbas, so we really need to set up the sns topic so that our preprocessing lambda can invoke the mini mwas lambdas via sns
