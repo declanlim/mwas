@@ -486,7 +486,13 @@ class BioProjectInfo:
                 continue
 
             for _, row in self.metadata_df.iterrows():
-                if row['test_type'] == 't-test' and (not self.config.TEST_BLACKLISTED_METADATA_FIELDS or row['skippable?'] == 0):
+                blacklisted = False
+                if not self.config.TEST_BLACKLISTED_METADATA_FIELDS:
+                    fields = row['attributes'].split('; ')
+                    blacklisted = all(field in BLACKLISTED_METADATA_FIELDS for field in fields)
+                    if blacklisted:
+                        self.config.log_print(f"skipping blacklisted test {row['attributes']}", 2)
+                if row['test_type'] == 't-test' and not (blacklisted or row['skippable?'] == 0):
                     new_row = {
                         'include': row['include?'],
                         'biosample_index_list': row['biosample_index_list'],
@@ -572,6 +578,13 @@ class BioProjectInfo:
 
             # add the tests to the tests list
             for _, row in sets_subset_df.iterrows():
+                blacklisted = False
+                if not self.config.TEST_BLACKLISTED_METADATA_FIELDS:
+                    fields = row['attributes'].split('; ')
+                    blacklisted = all(field in BLACKLISTED_METADATA_FIELDS for field in fields)
+                if row['test_type'] == 't-test' and not (blacklisted or row['skippable?'] == 0):
+                    self.config.log_print(f"skipping blacklisted test {row['attributes']}", 2)
+                    continue
                 tests.append({
                     'include': row['include?'],
                     'biosample_index_list': row['biosample_index_list'],

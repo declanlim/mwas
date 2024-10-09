@@ -106,7 +106,8 @@ def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, 
     CONFIG.log_print(f"Stored in dynamoDB: {item}", 1)
 
     # scan the table to see if this was the last lambda to finish
-    response = dynamodb.query(
+    dynamodb_client = boto3.client('dynamodb')
+    response = dynamodb_client.query(
         TableName='mwas_notification_handler',
         KeyConditionExpression=f"mwas_id = :pk_value",
         ExpressionAttributeValues={":pk_value": {"S": mwas_id}},

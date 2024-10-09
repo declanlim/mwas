@@ -3,7 +3,7 @@ import os
 import time
 # from datetime import datetime, timedelta
 import boto3
-import subprocess
+# import subprocess
 
 S3_BUCKET_BOTO = 'serratus-biosamples'
 S3_OUTPUT_DIR_BOTO = 'mwas-user-dump'
@@ -40,12 +40,12 @@ def lambda_handler(event: dict, context):
     print("downloaded progress.json")
     with open(f"/tmp/{PROGRESS_FILE}", 'r') as f:
         progress = json.load(f)
-        if progress['status'] == "post-processing" or progress['status'] == "MWAS COMPLETED":
-            print("postprocessing already done. Exiting.")
-            return {
-                'statusCode': 200,
-                'message': f"postprocessing already done, likely due to redundant triggering via alarm for safety invoke."
-            }
+        # if progress['status'] == "post-processing" or progress['status'] == "MWAS COMPLETED":
+        #     print("postprocessing already done. Exiting.")
+        #     return {
+        #         'statusCode': 200,
+        #         'message': f"postprocessing already done, likely due to redundant triggering via alarm for safety invoke."
+        #     }
     with open(f"/tmp/{PROGRESS_FILE}", 'w') as f:
         start_time = time.time()
         json.dump({
@@ -61,7 +61,7 @@ def lambda_handler(event: dict, context):
             'total_cost': str(total_cost)
         }, f)
     # sync progress.json to s3
-    s3.upload_file(f"/tmp/{PROGRESS_FILE}", S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{PROGRESS_FILE}")
+    s3.upload_file(f"/tmp/{PROGRESS_FILE}", S3_OUTPUT_DIR_BOTO, f"{link}/{PROGRESS_FILE}")
     print("updated progress.json and now starting postprocessing combining")
 
     # start the postprocessing
@@ -80,7 +80,7 @@ def lambda_handler(event: dict, context):
             'total_cost': str(total_cost)
         }, f)
         # sync progress.json to s3
-    s3.upload_file(f"/tmp/{PROGRESS_FILE}", S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{PROGRESS_FILE}")
+    s3.upload_file(f"/tmp/{PROGRESS_FILE}", S3_OUTPUT_DIR_BOTO, f"{link}/{PROGRESS_FILE}")
 
     print("postprocessing done. Time spent on postprocessing: ", time.time() - post_start_time)
     print("MWAS runtime: ", time.time() - start_time)
@@ -156,7 +156,7 @@ def postprocessing(link):
     """postprocessing of the results"""
     print(f"combining the result files from all the lambdas for this mwas run {link}")
     s3_dir = f"{link}/{OUTPUT_FILES_DIR}/"
-    files_dir = '/tmp/mwas_results'
+    files_dir = '/tmp/mwas_results/'
     os.mkdir(files_dir)
     try:
         print(s3_dir)
@@ -168,7 +168,7 @@ def postprocessing(link):
             if file_name == '':  # this is the directory itself... a weird thing that s3 does
                 continue
             print(f"downloading {file_name}, i.e. {obj['Key']}")
-            s3.download_file(S3_OUTPUT_DIR_BOTO, obj['Key'], f"{files_dir}/{file_name}")
+            s3.download_file(S3_OUTPUT_DIR_BOTO, obj['Key'], f"{files_dir}{file_name}")
             print(f"downloaded {file_name}")
     except Exception as e:
         print(f"Error in syncing output: {e}")
@@ -183,7 +183,7 @@ def postprocessing(link):
         final_output.write(','.join(OUT_COLS) + '\n')
         for file in os.listdir(files_dir):
             if file.endswith('.txt'):
-                with open(f"{files_dir}/{file}", 'r') as result_file:
+                with open(f"{files_dir}{file}", 'r') as result_file:
                     lines = result_file.readlines()
                     for line in lines:
                         comma_index = line.find(',')

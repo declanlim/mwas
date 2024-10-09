@@ -3,7 +3,6 @@ import os
 import time
 import uuid
 import psycopg2
-from shutil import rmtree
 from mwas_functions_for_preprocessing import *
 
 # globals
@@ -90,14 +89,13 @@ def s3_sync():
         file_list = os.listdir(TEMP_LOCAL_BUCKET)
         CONFIG.log_print(file_list)
         for file in file_list:
-            CONFIG.log_print(file)
             if '.' in file:  # file
                 s3_client.upload_file(f"{TEMP_LOCAL_BUCKET}/{file}", S3_MWAS_DATA, f"{HASH_LINK}/{file}")
-                CONFIG.log_print(f"Uploaded {file} to s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}")
+                # CONFIG.log_print(f"Uploaded {file} to s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}")
             else:  # folder
                 s3_path = f"{HASH_LINK}/{file}/"
                 s3_client.put_object(Bucket=S3_MWAS_DATA, Key=s3_path)
-                CONFIG.log_print(f"made s3 folder: {S3_MWAS_DATA}/{s3_path}")
+                # CONFIG.log_print(f"made s3 folder: {S3_MWAS_DATA}/{s3_path}")
         CONFIG.log_print(f"Synced s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}")
     except Exception as e:
         CONFIG.log_print(f"Error in syncing s3 bucket: {S3_MWAS_DATA}/{HASH_LINK}: {e}", 0)
@@ -359,13 +357,20 @@ def lambda_handler(event, context):
     print(context)
 
     try:
+        if 'body' not in event:
+            body = event
+        else:
+            body = event['body']
+            if isinstance(body, str):  # addresses a string key issue
+                body = json.loads(body)
+
         global HASH_LINK
-        HASH_LINK = event['hash']
-        flags = event['flags']
+        HASH_LINK = body['hash']
+        flags = body['flags']
     except KeyError:
         return {
             'statusCode': 400,
-            'message': 'hash and flags must be provided in the event'
+            'message': 'hash and flags must be provided in the event body'
         }
     ret = main(flags)
     print(f"finished with: {ret}")

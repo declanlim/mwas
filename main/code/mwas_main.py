@@ -357,13 +357,20 @@ def lambda_handler(event, context):
     print(context)
 
     try:
+        if 'body' not in event:
+            body = event
+        else:
+            body = event['body']
+            if isinstance(body, str):  # addresses a string key issue
+                body = json.loads(body)
+
         global HASH_LINK
-        HASH_LINK = event['hash']
-        flags = event['flags']
+        HASH_LINK = body['hash']
+        flags = body['flags']
     except KeyError:
         return {
             'statusCode': 400,
-            'message': 'hash and flags must be provided in the event'
+            'message': 'hash and flags must be provided in the event body'
         }
     ret = main(flags)
     print(f"finished with: {ret}")

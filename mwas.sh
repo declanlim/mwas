@@ -299,6 +299,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
         echo "Error: $ERROR"
         exit 1
     fi
+    echo "recieved presigned url to upload input file"
 
     PRESIGNED_URL=$(echo $RESPONSE | jq -r '.presigned_url')
     HASH=$(echo $RESPONSE | jq -r '.hash')
@@ -310,16 +311,20 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
 
     # using the presigned url, upload the file (it will go to the correct folder in s3)
     # save name of file
-    name=$(basename $CSV_FILE)
     new_name="input.csv"
-    mv $CSV_FILE $new_name
-    curl -v --upload-file $CSV_FILE $PRESIGNED_URL
-    # restore name
-    mv $new_name $CSV_FILE
+    if [[ $CSV_FILE != $new_name ]]; then
+        mv $CSV_FILE $new_name
+    fi
+    echo "Uploading your input file to s3..."
+    curl -v --upload-file $new_name $PRESIGNED_URL
     # check if the file was uploaded successfully
     if [[ $? -ne 0 ]]; then
         echo "Error: There was an issue uploading the input file to s3"
         exit 1
+    fi
+    # restore name
+    if [[ $CSV_FILE != $new_name ]]; then
+        mv $new_name $CSV_FILE
     fi
 
     # set up directory to store results
@@ -327,6 +332,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     if [[ ! -d $results_dir ]]; then
         mkdir $results_dir
     fi
+    echo "set up a local dir for you: $results_dir"
 
     # send API request to start MWAS
     # data should be have a hash attribute and flags attribute, where flags is a dict of the flags and their values (e.g. true or false or a value for thinsg like p-value setting)
@@ -352,7 +358,11 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
       done
       JSON_DATA="${JSON_DATA::-1}}}"  # remove last comma and close the dict
     fi
-
+    echo "sending $JSON_DATA to the mwas preprocessing aws lambda to begin the mwas run"
+    echo "================================"
+    echo "      MWAS SESSION CODE:"
+    echo "$hash"
+    echo "================================"
     RESPONSE=$(curl -X POST $API_GATEWAY_URL/mwas_initiate \
              -H "Content-Type: application/json" \
              -d "$JSON_DATA")
@@ -364,10 +374,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
         exit 1
     fi
 
-    echo "================================"
-    echo "      MWAS SESSION CODE:"
-    echo "$hash"
-    echo "================================"
+
 fi
 #
 #    # send request to server to run MWAS (how to catch response?
