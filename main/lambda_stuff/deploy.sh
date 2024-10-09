@@ -1,3 +1,4 @@
+#!/bin/bash
 cd ../code
 cp mwas_lambda.py ../lambda_stuff/lam_pack/mwas_lambda.py
 cp mwas_functions.py ../lambda_stuff/lam_pack/mwas_functions.py

@@ -1,3 +1,4 @@
+#!/bin/bash
 cd ../code
 cp mwas_main.py ../lambda_stuff/lam_pack_pre/mwas_main.py
 cp mwas_functions_for_preprocessing.py ../lambda_stuff/lam_pack_pre/mwas_functions_for_preprocessing.py

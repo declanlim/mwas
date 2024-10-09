@@ -38,7 +38,7 @@ def lambda_handler(event: dict, context):
 
         # get the main_df
         try:
-            s3.download_file(S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{MAIN_DF_PICKLE}", DIR_SUFFIX + 'main_df.pickle')
+            s3.download_file(S3_OUTPUT_DIR_BOTO, f"{link}/{MAIN_DF_PICKLE}", DIR_SUFFIX + 'main_df.pickle')
             CONFIG.log_print(f"Downloaded main_df from s3", 1)
             with open(DIR_SUFFIX + 'main_df.pickle', 'rb') as f:
                 main_df = pickle.load(f)
@@ -75,13 +75,13 @@ def exit_handler(status_code, message, time_duration, alias_size, process_id, mw
     """Exit function for testing"""
     # upload the result and log files to s3
     try:
-        s3.upload_file(DIR_SUFFIX + 'result.txt', S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{OUTPUT_FILES_DIR}/result_{process_id}.txt")
+        s3.upload_file(DIR_SUFFIX + 'result.txt', S3_OUTPUT_DIR_BOTO, f"{link}/{OUTPUT_FILES_DIR}/result_{process_id}.txt")
         CONFIG.log_print(f"Uploaded output file to s3", 1)
         # os.remove(DIR_SUFFIX + 'result.txt')
     except Exception as e:
         CONFIG.log_print(f"Error in uploading output file: {e}", 2)
     try:
-        s3.upload_file(DIR_SUFFIX + f"log_{process_id}.txt", S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{PROC_LOG_FILES_DIR}/log_{process_id}.txt")
+        s3.upload_file(DIR_SUFFIX + f"log_{process_id}.txt", S3_OUTPUT_DIR_BOTO, f"{link}/{PROC_LOG_FILES_DIR}/log_{process_id}.txt")
         CONFIG.log_print(f"Uploaded log file to s3", 1)
     except Exception as e:
         CONFIG.log_print(f"Error in uploading log file: {e}", 2)
@@ -106,7 +106,6 @@ def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, 
     CONFIG.log_print(f"Stored in dynamoDB: {item}", 1)
 
     # scan the table to see if this was the last lambda to finish
-    dynamodb = boto3.client('dynamodb')
     response = dynamodb.query(
         TableName='mwas_notification_handler',
         KeyConditionExpression=f"mwas_id = :pk_value",

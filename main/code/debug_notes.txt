@@ -1,0 +1,24 @@
+2024-10-08T21:47:16.816Z
+[ERROR] ClientError: An error occurred (404) when calling the HeadObject operation: Not Found
+Traceback (most recent call last):
+  File "/var/task/lambda_function.py", line 39, in lambda_handler
+    s3.download_file(S3_BUCKET_BOTO, f"{S3_OUTPUT_DIR_BOTO}/{link}/{PROGRESS_FILE}", f"/tmp/{PROGRESS_FILE}")
+  File "/var/lang/lib/python3.12/site-packages/boto3/s3/inject.py", line 192, in download_file
+    return transfer.download_file(
+  File "/var/lang/lib/python3.12/site-packages/boto3/s3/transfer.py", line 406, in download_file
+    future.result()
+  File "/var/lang/lib/python3.12/site-packages/s3transfer/futures.py", line 103, in result
+    return self._coordinator.result()
+  File "/var/lang/lib/python3.12/site-packages/s3transfer/futures.py", line 266, in result
+    raise self._exception
+  File "/var/lang/lib/python3.12/site-packages/s3transfer/tasks.py", line 269, in _main
+    self._submit(transfer_future=transfer_future, **kwargs)
+  File "/var/lang/lib/python3.12/site-packages/s3transfer/download.py", line 354, in _submit
+    response = client.head_object(
+  File "/var/lang/lib/python3.12/site-packages/botocore/client.py", line 565, in _api_call
+    return self._make_api_call(operation_name, kwargs)
+  File "/var/lang/lib/python3.12/site-packages/botocore/client.py", line 1021, in _make_api_call
+    raise error_class(parsed_response, operation_name)
+
+
+/tmp/result.txt not found??? check mwas_lambda.py code
