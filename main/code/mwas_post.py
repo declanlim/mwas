@@ -29,10 +29,10 @@ def lambda_handler(event: dict, context):
     mwas_id = message['mwas_id']
     link = message['link']
     expected_jobs = int(message['expected_jobs'])
-    print("recieved message:", message)
+    print("recieved event message:", message)
 
     messages = fetch_messages(mwas_id)
-    successes, fails, total_cost = process_messages(messages)
+    successes, fails, total_cost = process_messages(messages)  # this also gets the total cost of the fanout lambdas
     print("processed this many messages: ", len(messages), " successes: ", successes, " fails: ", fails, " total cost: ", total_cost)
 
     # get progress.json from s3
@@ -40,14 +40,16 @@ def lambda_handler(event: dict, context):
     print("downloaded progress.json")
     with open(f"/tmp/{PROGRESS_FILE}", 'r') as f:
         progress = json.load(f)
-        # if progress['status'] == "post-processing" or progress['status'] == "MWAS COMPLETED":
-        #     print("postprocessing already done. Exiting.")
-        #     return {
-        #         'statusCode': 200,
-        #         'message': f"postprocessing already done, likely due to redundant triggering via alarm for safety invoke."
-        #     }
+        if progress['status'] == "post-processing" or progress['status'] == "MWAS COMPLETED":
+            print("postprocessing already done. Exiting.")
+            return {
+                'statusCode': 200,
+                'message': f"postprocessing already done, likely due to redundant triggering via alarm for safety invoke."
+            }
     with open(f"/tmp/{PROGRESS_FILE}", 'w') as f:
-        start_time = time.time()
+        start_time = float(progress['start_time'])
+        total_cost += float(progress['preprocessing_time']) * (8000 / 1024) * 0.00001667  # add the cost of preprocessing
+        print("total cost with considering preprocessing: ", total_cost)
         json.dump({
             'status': "post-processing",
             'num_bioprojects': progress['num_bioprojects'],
@@ -58,7 +60,9 @@ def lambda_handler(event: dict, context):
             'start_time': str(start_time),
             'successes': str(successes),
             'fails': str(fails),
-            'total_cost': str(total_cost)
+            'total_cost': str(total_cost),
+            'postprocessing_time': str(time.time() - post_start_time),
+            'preprocessing_time': progress['preprocessing_time']
         }, f)
     # sync progress.json to s3
     s3.upload_file(f"/tmp/{PROGRESS_FILE}", S3_OUTPUT_DIR_BOTO, f"{link}/{PROGRESS_FILE}")
@@ -67,6 +71,8 @@ def lambda_handler(event: dict, context):
     # start the postprocessing
     permutation_tests, num_bioprojects = postprocessing(link)
     with open(f"/tmp/{PROGRESS_FILE}", 'w') as f:
+        total_cost += (time.time() - post_start_time) * (5400 / 1024) * 0.00001667  # add the cost of postprocessing
+        print("total cost with also considering postprocessing: ", total_cost)
         json.dump({
             'status': "MWAS COMPLETED",
             'num_bioprojects': str(num_bioprojects),
@@ -77,7 +83,9 @@ def lambda_handler(event: dict, context):
             'start_time': str(start_time),
             'successes': str(successes),
             'fails': str(fails),
-            'total_cost': str(total_cost)
+            'total_cost': str(total_cost),
+            'postprocessing_time': str(time.time() - post_start_time),
+            'preprocessing_time': progress['preprocessing_time']
         }, f)
         # sync progress.json to s3
     s3.upload_file(f"/tmp/{PROGRESS_FILE}", S3_OUTPUT_DIR_BOTO, f"{link}/{PROGRESS_FILE}")
@@ -157,7 +165,8 @@ def postprocessing(link):
     print(f"combining the result files from all the lambdas for this mwas run {link}")
     s3_dir = f"{link}/{OUTPUT_FILES_DIR}/"
     files_dir = '/tmp/mwas_results/'
-    os.mkdir(files_dir)
+    if not os.path.exists(files_dir):
+        os.mkdir(files_dir)
     try:
         print(s3_dir)
         response = s3.list_objects_v2(Bucket=S3_OUTPUT_DIR_BOTO, Prefix=s3_dir)

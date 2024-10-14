@@ -61,6 +61,7 @@ OUT_COLS = [
     'bioproject', 'group', 'metadata_field', 'metadata_value', 'test', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
     'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value', 'true_biosamples', 'false_biosamples', 'test_time_duration'
 ]
+size_names = {900: "_small", 3600: "", 5400: "", 7200: "_large", 10240: "_large"}
 
 logging.basicConfig(level=logging.INFO)
 
@@ -255,51 +256,126 @@ class BioProjectInfo:
         assert self.num_lambda_jobs == len(self.jobs)
         return self.n_actual_permutation_sets, self.num_lambda_jobs
 
-    def dispatch_all_lambda_jobs(self, mwas_id: str, link: str, lam_client: boto3.client, expected_jobs) -> None:
+    def dispatch_lambda(self, mwas_id: str, link: str, client: boto3.client, expected_jobs, bioproject_info, flags, job_window, lid, func, direct=False) -> None:
+        """only used by dispatch_all_lambda_jobs, which is currently not in use
+
+        note, this function doesn't even work properly for sns mode (direct=False) due to JSON parsing bugs....
+        also, direct mode isn't testing in this new format (but it was the method used by mwas until I introduced get_jobs)"""
+        message_data = {
+                    'mwas_id': mwas_id,
+                    'bioproject_info': bioproject_info,
+                    'link': link,
+                    'job_window': job_window,  # empty implies all groups
+                    'id': lid,  # 0 implies this is the non-perm tests lambda
+                    'flags': flags,
+                    'expected_jobs': expected_jobs
+                }
+        if not direct:
+            message_data['func'] = func
+        message = json.dumps(message_data)
+        if direct:  # send directly to lambda using a lambda client
+            client.invoke(
+                FunctionName=func,
+                InvocationType='Event',  # Asynchronous invocation
+                Payload=message
+            )
+        else:  # send to sns topic using an sns client
+            client.publish(
+                TopicArn='arn:aws:sns:us-east-1:797308887321:mwas_sns',
+                Message=message,
+                Subject=f"Dispatching lambda job for {mwas_id}",
+                MessageAttributes={
+                    'status': {
+                        'DataType': 'String',
+                        'StringValue': 'Dispatching lambda job'
+                    },
+                    'mwas_id': {
+                        'DataType': 'String',
+                        'StringValue': mwas_id
+                    },
+                    'bioproject_info': {
+                        'DataType': 'String',
+                        'StringValue': bioproject_info
+                    },
+                    'link': {
+                        'DataType': 'String',
+                        'StringValue': link
+                    },
+                    'job_window': {
+                        'DataType': 'String',
+                        'StringValue': job_window
+                    },
+                    'id': {
+                        'DataType': 'Number',
+                        'StringValue': lid
+                    },
+                    'flags': {
+                        'DataType': 'String',
+                        'StringValue': flags
+                    },
+                    'expected_jobs': {
+                        'DataType': 'Number',
+                        'StringValue': expected_jobs
+                    },
+                    'func': {
+                        'DataType': 'String',
+                        'StringValue': func
+                    }
+                })
+
+    def dispatch_all_lambda_jobs(self, mwas_id: str, link: str, sns_client: boto3.client, expected_jobs) -> None:
         """lam_client: lambda_client = boto3.client('lambda')
 
         note lambda handler will call self.process_bioproject(...)
+
+        -----CURRENTLY NOT IN USE-----
         """
         bioproject_info = self.to_json()
         flags = self.config.to_json()
 
         self.config.log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
         # non permutation test lambda(TODO: lambda[s]?)  always uses the 4 core 5400MB ram lambda
-        lam_client.invoke(
-            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
-            InvocationType='Event',  # Asynchronous invocation
-            Payload=json.dumps({
-                'mwas_id': mwas_id,
-                'bioproject_info': bioproject_info,
-                'link': link,
-                'job_window': 'full',  # empty implies all groups
-                'id': 0,  # 0 implies this is the non-perm tests lambda
-                'flags': flags,
-                'expected_jobs': expected_jobs
-            })
-        )
+        self.dispatch_lambda(mwas_id, link, sns_client, str(expected_jobs), str(bioproject_info), str(flags),
+                             'full', str(0), 'arn:aws:lambda:us-east-1:797308887321:function:mwas')
 
         # pick the next lambda size to fit our size
         lambda_alias = f"{self.lambda_size}MBram"
+
         for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
             self.config.log_print(f"dispatching lambda job {i + 1} for {self.name}")
             # Invoke the Lambda function
-            size_names = {900: "_small", 3600: "", 5400: "", 7200: "_large", 10240: "_large"}
-            extra = size_names[self.lambda_size]
-            lam_client.invoke(
-                FunctionName=f'arn:aws:lambda:us-east-1:797308887321:function:mwas{extra}',
-                InvocationType='Event',  # Asynchronous invocation
-                Payload=json.dumps({
-                    'mwas_id': mwas_id,
-                    'bioproject_info': bioproject_info,
-                    'link': link,
-                    'job_window': job,
-                    'id': str(i + 1),
-                    'flags': flags,
-                    'expected_jobs': expected_jobs
-                })
-            )
 
+            extra = size_names[self.lambda_size]
+            self.dispatch_lambda(mwas_id, link, sns_client, str(expected_jobs), str(bioproject_info), str(flags), str(job), str(i + 1),
+                                 f'arn:aws:lambda:us-east-1:797308887321:function:mwas{extra}')
+
+    def get_jobs(self, mwas_id, link, total_lambda_jobs, flags, job_list):
+        """Get the jobs for this bioproject
+
+        mutates job list to save append overhead"""
+        bioproject_info = self.to_json()
+        job_list.append({
+            'mwas_id': mwas_id,
+            'bioproject_info': bioproject_info,
+            'link': link,
+            'job_window': 'full',  # empty implies all groups
+            'id': str(0),  # 0 implies this is the non-perm tests lambda
+            'flags': flags,
+            'expected_jobs': total_lambda_jobs,
+            'func': 'mwas'
+        })
+        for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
+            extra = size_names[self.lambda_size]
+            job_list.append({
+                'mwas_id': mwas_id,
+                'bioproject_info': bioproject_info,
+                'link': link,
+                'job_window': job,  # empty implies all groups
+                'id': str(i + 1),
+                'flags': flags,
+                'expected_jobs': total_lambda_jobs,
+                'func': f'mwas{extra}'
+            })
 
 def load_bioproject_from_dict(config: Config, bioproject_dict: dict) -> BioProjectInfo:
     """Load a bioproject from a dictionary"""

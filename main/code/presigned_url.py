@@ -25,7 +25,7 @@ def lambda_handler(event, context):
             if not folder_exists:
                 raise ValueError("this folder does not exist")
 
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=hash_value + '/progress_report.json', MaxKeys=1)
+            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=hash_value + '/progress.json', MaxKeys=1)
             mwas_started = 'Contents' in response and len(response['Contents']) > 0
             if not mwas_started:
                 raise ValueError("this folder exists but MWAS hasn't started yet")

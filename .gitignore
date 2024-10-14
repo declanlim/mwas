@@ -30,6 +30,6 @@ main/real_mwas_runs/
 main/code/test*
 main/code/__pycache__/
 main/utilities/readable_condensed_bioproject_metadata_csvs/
-#main/lambda_stuff/lam_pack/
+main/lambda_stuff/lam_pack/
 main/lambda_stuff/deppack*
-#main/lambda_stuff/lam_pack_pre/
+main/lambda_stuff/lam_pack_pre/

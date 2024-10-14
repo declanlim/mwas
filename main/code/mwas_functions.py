@@ -492,7 +492,7 @@ class BioProjectInfo:
                     blacklisted = all(field in BLACKLISTED_METADATA_FIELDS for field in fields)
                     if blacklisted:
                         self.config.log_print(f"skipping blacklisted test {row['attributes']}", 2)
-                if row['test_type'] == 't-test' and not (blacklisted or row['skippable?'] == 0):
+                if row['test_type'] == 't-test' and not (blacklisted or row['skippable?'] == 1):
                     new_row = {
                         'include': row['include?'],
                         'biosample_index_list': row['biosample_index_list'],
@@ -582,7 +582,7 @@ class BioProjectInfo:
                 if not self.config.TEST_BLACKLISTED_METADATA_FIELDS:
                     fields = row['attributes'].split('; ')
                     blacklisted = all(field in BLACKLISTED_METADATA_FIELDS for field in fields)
-                if row['test_type'] == 't-test' and not (blacklisted or row['skippable?'] == 0):
+                if row['test_type'] == 't-test' or blacklisted or row['skippable?'] == 1:
                     self.config.log_print(f"skipping blacklisted test {row['attributes']}", 2)
                     continue
                 tests.append({

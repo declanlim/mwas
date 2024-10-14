@@ -285,10 +285,59 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     # hash value used to reference this mwas run
     hash=$(echo -n "${FILE_HASH}${FLAGS_HASH}" | sha256sum | awk '{ print $1 }')
 
+     # data should be have a hash attribute and flags attribute, where flags is a dict of the flags and their values (e.g. true or false or a value for thinsg like p-value setting)
+    JSON_DATA="{\"hash\": \"$hash\", \"flags\": {"
+    # if flags is empty
+    if [[ ${#FLAGS} -eq 0 ]]; then
+      JSON_DATA="$JSON_DATA}}"
+    else
+      # split flags into an array
+      FLAGS=($FLAGS)
+      for ((i=0; i<${#FLAGS[@]}; i++)); do
+        flag=${FLAGS[$i]}
+        case $flag in
+          --suppress-logging)
+            JSON_DATA="$JSON_DATA\"suppress_logging\": 1,"
+            ;;
+          --no-logging)
+            JSON_DATA="$JSON_DATA\"no_logging\": 1,"
+            ;;
+          --already-normalized)
+            JSON_DATA="$JSON_DATA\"already_normalized\": 1,"
+            ;;
+          --explicit-zeros|--explicit-zeroes)
+            JSON_DATA="$JSON_DATA\"explicit_zeros\": 1,"
+            ;;
+          --p-value-threshold)
+            # get the value of the next flag
+            next_flag=${FLAGS[$i+1]}
+            # check if it's a float between 0 and 1
+            if [[ ! $next_flag =~ ^0.[0-9]+$ ]]; then
+                echo "Error: p-value threshold must be a float between 0 and 1"
+                exit 1
+            fi
+            JSON_DATA="$JSON_DATA\"p_value_threshold\": $next_flag,"
+            ;;
+          --group-nonzero-threshold)
+            next_flag=${FLAGS[$i+1]}
+            # check if it's an integer
+            if [[ ! $next_flag =~ ^[0-9]+$ ]]; then
+                echo "Error: group nonzero threshold must be an integer"
+                exit 1
+            fi
+            JSON_DATA="$JSON_DATA\"group_nonzero_threshold\": $next_flag,"
+            ;;
+        esac
+      done
+      JSON_DATA="${JSON_DATA::-1}}}"  # remove last comma and close the dict
+    fi
+    echo "JSON_DATA: $JSON_DATA"
+
     # get presigned url for the input file
+    echo "getting presigned url to upload input file..."
     API_GATEWAY_URL="https://6fnk2z2hcj.execute-api.us-east-1.amazonaws.com"
     # needs attributes bucket_name and hash
-    RESPONSE=$(curl -X POST $API_GATEWAY_URL/presigned_url_generator \
+    RESPONSE=$(curl -sS -X POST $API_GATEWAY_URL/presigned_url_generator \
              -H "Content-Type: application/json" \
              -d "{\"bucket_name\": \"$S3_BUCKET\", \"hash\": \"$hash\"}")
     # check status
@@ -299,8 +348,6 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
         echo "Error: $ERROR"
         exit 1
     fi
-    echo "recieved presigned url to upload input file"
-
     PRESIGNED_URL=$(echo $RESPONSE | jq -r '.presigned_url')
     HASH=$(echo $RESPONSE | jq -r '.hash')
     # verify that the hash is the same as the one we calculated
@@ -311,12 +358,12 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
 
     # using the presigned url, upload the file (it will go to the correct folder in s3)
     # save name of file
+    echo "Uploading your input file to s3..."
     new_name="input.csv"
     if [[ $CSV_FILE != $new_name ]]; then
         mv $CSV_FILE $new_name
     fi
-    echo "Uploading your input file to s3..."
-    curl -v --upload-file $new_name $PRESIGNED_URL
+    curl -v -sS --upload-file $new_name $PRESIGNED_URL
     # check if the file was uploaded successfully
     if [[ $? -ne 0 ]]; then
         echo "Error: There was an issue uploading the input file to s3"
@@ -335,46 +382,26 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     echo "set up a local dir for you: $results_dir"
 
     # send API request to start MWAS
-    # data should be have a hash attribute and flags attribute, where flags is a dict of the flags and their values (e.g. true or false or a value for thinsg like p-value setting)
-    JSON_DATA="{\"hash\": \"$hash\", \"flags\": {"
-    # if flags is empty
-    if [[ ${#FLAGS} -eq 0 ]]; then
-        JSON_DATA="$JSON_DATA}}"
-    else
-      for flag in $FLAGS; do
-          if [[ $flag == "--suppress-logging" ]]; then
-              JSON_DATA="$JSON_DATA\"suppress_logging\": 1,"
-          elif [[ $flag == "--no-logging" ]]; then
-              JSON_DATA="$JSON_DATA\"suppress_logging\": 1,"
-          elif [[ $flag == "--already-normalized" ]]; then
-              JSON_DATA="$JSON_DATA\"already_normalized\": 1,"
-          elif [[ $flag == "--explicit-zeros" ]]; then
-              JSON_DATA="$JSON_DATA\"explicit_zeros\": 1,"
-          elif [[ $flag == "--p-value-threshold" ]]; then
-              JSON_DATA="$JSON_DATA\"p_value_threshold\": ${FLAGS[$i+1]},"
-          elif [[ $flag == "--group-nonzero-threshold" ]]; then
-              JSON_DATA="$JSON_DATA\"group_nonzero_threshold\": ${FLAGS[$i+1]},"
-          fi
-      done
-      JSON_DATA="${JSON_DATA::-1}}}"  # remove last comma and close the dict
-    fi
     echo "sending $JSON_DATA to the mwas preprocessing aws lambda to begin the mwas run"
     echo "================================"
     echo "      MWAS SESSION CODE:"
     echo "$hash"
     echo "================================"
-    RESPONSE=$(curl -X POST $API_GATEWAY_URL/mwas_initiate \
+
+    RESPONSE=$(curl -sS -X POST $API_GATEWAY_URL/mwas_initiate \
              -H "Content-Type: application/json" \
              -d "$JSON_DATA")
     STATUS=$(echo $RESPONSE | jq -r '.statusCode')
     if [[ $STATUS != 200 ]]; then
         # read error message in body
         ERROR=$(echo $RESPONSE | jq -r '.message')
-        echo "Error: $ERROR"
+        if [[ $ERROR == "" ]]; then
+            echo "Since we haven't gotten an error yet, things should be running fine."
+            exit 0
+        fi
+        echo "ERROR: $ERROR"
         exit 1
     fi
-
-
 fi
 #
 #    # send request to server to run MWAS (how to catch response?
