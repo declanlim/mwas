@@ -32,6 +32,9 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
   - Significant results will also report all the biosamples in the true and false sets, as long as there are under 200 biosamples to report
   - Each test result corresponds to a metadata field:value category + group + bioproject combination. It intends to convey the correlation between the metadata field:value category and the group. The bioproject is just for reference (of which biosamples were used in the test)
   - The type of test used (t-test or permutation test) is also reported in the results
+- If you have a large amount of data (over 5 million runs), it is recommended to split the data into multiple files.
+  - Preferably, split by bioproject (this may be hard to tell, as we don't expect you to know the bioprojects), as opposed to splitting by groups. This way, it'll be much more efficient to run due to how MWAS batches jobs and parallelizes tests.
+
 
 # Input Format
 - The user must provide a CSV file with the following columns:

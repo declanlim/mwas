@@ -4,7 +4,7 @@ Set up deployment package
 # add mwas_lambda.py and mwas_functions.py to the dir from v2
 # edit mwas_lambda.py so that it doesn't have its if __name__ == main tests,
 # and edit mwas_functions.py so that DIR_SUFFIX = '/tmp/' instead of ''
-# run the following:
+# run the following in the lam_pack dir:
 
 pip install --platform manylinux2014_x86_64 --target=. --implementation cp --python-version 3.12 --only-binary=:all: --upgrade scipy=1.13.0
 pip install --platform manylinux2014_x86_64 --target=. --implementation cp --python-version 3.12 --only-binary=:all: --upgrade pandas==2.2.2
@@ -30,3 +30,13 @@ du -cksh *
 
 # then upload the zip file to AWS Lambda
 aws s3 cp deppack.zip s3://serratus-biosamples/mwas_lambda_zips/deppack.zip
+
+for deppack_pre, don't install scipy, instead, install psycopg2-binary
+pip install --platform manylinux2014_x86_64 --target=. --implementation cp --python-version 3.12 --only-binary=:all: --upgrade psycopg2-binary==2.9.9
+zip -r ../deppack_pre.zip .
+aws s3 cp deppack_pre.zip s3://serratus-biosamples/mwas_lambda_zips/deppack_pre.zip
+
+
+
+todo: deploy efficiency (i.e. have existing zip sans the code files, then cp it, add code files, upload that, then delete)
+todo: add mwas.sh functionality for user to download the results of a job...
