@@ -239,18 +239,23 @@ def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int,
     flags = CONFIG.to_json()
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.get_jobs(mwas_id, HASH_LINK, total_lambda_jobs, flags, job_list)
-
-    for i in range(0, len(job_list), 1200):
-        if len(job_list) - i < 1200:
+        bioproject_obj.get_jobs(job_list)
+    # event limit is 256KB, one job message is about 390bytes, round to 400. then add 500 to account for other data
+    # so we'll do it in batches of 600 (which is roughly min(1200, (1024 * 256 - 500) / 400))
+    batch_size = 600
+    for i in range(0, len(job_list), batch_size):
+        if len(job_list) - i < batch_size:
             job_slice = job_list[i:]
             CONFIG.log_print(f"Dispatching jobs {i} to {len(job_list)}")
         else:
-            job_slice = job_list[i:i + 1200]
-            CONFIG.log_print(f"Dispatching jobs {i} to {i + 1200}")
+            job_slice = job_list[i:i + batch_size]
+            CONFIG.log_print(f"Dispatching jobs {i} to {i + batch_size}")
         payload = {
             'jobs': job_slice,
-            'mwas_id': mwas_id
+            'mwas_id': mwas_id,
+            'flags': flags,
+            'link': HASH_LINK,
+            'expected_jobs': total_lambda_jobs
         }
         LAMBDA_CLIENT.invoke(
             FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_pre_helper',

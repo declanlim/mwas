@@ -349,31 +349,23 @@ class BioProjectInfo:
             self.dispatch_lambda(mwas_id, link, sns_client, str(expected_jobs), str(bioproject_info), str(flags), str(job), str(i + 1),
                                  f'arn:aws:lambda:us-east-1:797308887321:function:mwas{extra}')
 
-    def get_jobs(self, mwas_id, link, total_lambda_jobs, flags, job_list):
+    def get_jobs(self, job_list):
         """Get the jobs for this bioproject
 
         mutates job list to save append overhead"""
         bioproject_info = self.to_json()
         job_list.append({
-            'mwas_id': mwas_id,
             'bioproject_info': bioproject_info,
-            'link': link,
             'job_window': 'full',  # empty implies all groups
             'id': str(0),  # 0 implies this is the non-perm tests lambda
-            'flags': flags,
-            'expected_jobs': total_lambda_jobs,
             'func': 'mwas'
         })
         for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
             extra = size_names[self.lambda_size]
             job_list.append({
-                'mwas_id': mwas_id,
                 'bioproject_info': bioproject_info,
-                'link': link,
                 'job_window': job,  # empty implies all groups
                 'id': str(i + 1),
-                'flags': flags,
-                'expected_jobs': total_lambda_jobs,
                 'func': f'mwas{extra}'
             })
 

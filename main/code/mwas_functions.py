@@ -415,7 +415,7 @@ class BioProjectInfo:
                 group_focus = job
             self.build_rpm_map(subset_df, group_focus)
         self.config.log_print(f"STARTING TESTS FOR {self.name}-{identifier}...\n")
-        if id == 0:  # t-test job
+        if id == 0 or id == '0':  # t-test job
             result = self.process_bioproject_other()
         else:
             if isinstance(job, str):

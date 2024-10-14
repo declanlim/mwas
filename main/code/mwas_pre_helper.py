@@ -10,11 +10,20 @@ def lambda_handler(event, context):
     # get the data from event
     # note event is a job_slice and mwas_id
     mwas_id = event['mwas_id']
-    job_slice = event['job_slice']
+    job_slice = event['jobs']
+    expected_jobs = event['expected_jobs']
+    link = event['link']
+    flags = event['flags']
+
     LAMBDA_CLIENT = boto3.client('lambda')
     for job in job_slice:
         # invoke the lambda
         func_choice = job['func']
+        job['expected_jobs'] = expected_jobs
+        job['mwas_id'] = mwas_id
+        job['link'] = link
+        job['flags'] = flags
+
         print(f"invoking a {func_choice}")
         print("job: ", job)
         response = LAMBDA_CLIENT.invoke(
