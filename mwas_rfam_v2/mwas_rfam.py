@@ -73,7 +73,7 @@ def mean_diff_statistic(x, y, axis):
 
 # ---------------------------------------------
 
-warnings.filterwarnings('ignore') # FIX THIS LATERE TO NOT IGNORE WARNINGS
+warnings.filterwarnings('ignore') # FIX THIS LATER TO NOT IGNORE WARNINGS
 
 # database connection details
 host = "serratus-aurora-20210406.cluster-ro-ccz9y6yshbls.us-east-1.rds.amazonaws.com"
