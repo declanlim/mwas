@@ -232,36 +232,52 @@ def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int,
 
     # graph this to see lambda job count distribution: sorted([bioprojects_dict[x].num_lambda_jobs for x in bioprojects_dict])
 
-    LAMBDA_CLIENT = boto3.client('lambda')
     mwas_id = str(uuid.uuid4())
     # DISPATCH ALL LAMBDA JOBS
-    job_list = []
+    # LAMBDA_CLIENT = boto3.client('lambda')
+    # job_list = []
+    # flags = CONFIG.to_json()
+    # for bioproject in bioprojects_dict:
+    #     bioproject_obj = bioprojects_dict[bioproject]
+    #     bioproject_obj.get_jobs(job_list)
+    # # event limit is 256KB, one job message is about 390bytes, round to 400. then add 500 to account for other data
+    # # so we'll do it in batches of 600 (which is roughly min(1200, (1024 * 256 - 500) / 400))
+    # batch_size, left_off = 600, 0
+    # job_is_done = False
+    # while not job_is_done:
+    #     for i in range(left_off, len(job_list), batch_size):
+    #         if len(job_list) - i < batch_size:
+    #             job_slice = job_list[i:]
+    #             CONFIG.log_print(f"Dispatching jobs {i} to {len(job_list)}")
+    #         else:
+    #             job_slice = job_list[i:i + batch_size]
+    #             CONFIG.log_print(f"Dispatching jobs {i} to {i + batch_size}")
+    #         payload = {
+    #             'jobs': job_slice,
+    #             'mwas_id': mwas_id,
+    #             'flags': flags,
+    #             'link': HASH_LINK,
+    #             'expected_jobs': total_lambda_jobs
+    #         }
+    #         try:
+    #             LAMBDA_CLIENT.invoke(
+    #                 FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_pre_helper',
+    #                 InvocationType='Event',  # Asynchronous invocation
+    #                 Payload=json.dumps(payload)
+    #             )
+    #         except Exception as e:
+    #             CONFIG.log_print(f"Error in invoking lambda: {e}", 0)
+    #             left_off = i
+    #             batch_size = max(10, batch_size // 2)
+    #             break
+    #     job_is_done = True
+
+    SNS_CLIENT = boto3.client('sns')
     flags = CONFIG.to_json()
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.get_jobs(job_list)
-    # event limit is 256KB, one job message is about 390bytes, round to 400. then add 500 to account for other data
-    # so we'll do it in batches of 600 (which is roughly min(1200, (1024 * 256 - 500) / 400))
-    batch_size = 600
-    for i in range(0, len(job_list), batch_size):
-        if len(job_list) - i < batch_size:
-            job_slice = job_list[i:]
-            CONFIG.log_print(f"Dispatching jobs {i} to {len(job_list)}")
-        else:
-            job_slice = job_list[i:i + batch_size]
-            CONFIG.log_print(f"Dispatching jobs {i} to {i + batch_size}")
-        payload = {
-            'jobs': job_slice,
-            'mwas_id': mwas_id,
-            'flags': flags,
-            'link': HASH_LINK,
-            'expected_jobs': total_lambda_jobs
-        }
-        LAMBDA_CLIENT.invoke(
-            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_pre_helper',
-            InvocationType='Event',  # Asynchronous invocation
-            Payload=json.dumps(payload)
-        )
+        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, HASH_LINK, SNS_CLIENT, total_lambda_jobs, flags, direct=False)
+        del bioproject_obj
 
     return num_bioprojects, total_lambda_jobs, total_perm_tests
 
@@ -314,7 +330,8 @@ def main(flags: dict):
         return 1, 'could not set s3 output directory'
 
     # set flags
-
+    if 'ignore_dynamo' in flags:
+        CONFIG.IGNORE_DYNAMO = 1
     if 'already_normalized' in flags:  # TODO: test
         CONFIG.ALREADY_NORMALIZED = flags['already_normalized']
     if 'p_value_threshold' in flags:

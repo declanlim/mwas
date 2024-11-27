@@ -1,6 +1,7 @@
 """Lambda function - for statistical tests - for MWAS"""
 import uuid
 from datetime import datetime, timedelta
+import ast
 
 from mwas_functions import *
 
@@ -14,11 +15,24 @@ def lambda_handler(event: dict, context):
     start_time = time.perf_counter()
     size = context.memory_limit_in_mb
     # get the data from event
-    bioproject_info = event['bioproject_info']
+
+    print(event)
+    print(context)
+    if "Records" in event:  # then this is from SNS
+        event = json.loads(event['Records'][0]['Sns']['Message'])
+        if not isinstance(event['job_window'], str):
+            job_window = ast.literal_eval(event['job_window'])
+        else:
+            job_window = event['job_window']
+        bioproject_info = ast.literal_eval(event['bioproject_info'])
+
+    else:
+        bioproject_info = event['bioproject_info']
+        job_window = event['job_window']
+
     link = event['link']
-    job_window = event['job_window']
     lam_id = event['id']
-    expected_jobs = event['expected_jobs']
+    expected_jobs = int(event['expected_jobs'])
     try:
         mwas_id = event['mwas_id']
     except KeyError:
@@ -27,7 +41,10 @@ def lambda_handler(event: dict, context):
     process_id = f"{bioproject_info['name']}_job{lam_id}"
 
     try:
-        CONFIG.load_from_json(event['flags'])
+        if isinstance(event['flags'], str):
+            CONFIG.load_from_json(ast.literal_eval(event['flags']))
+        else:
+            CONFIG.load_from_json(event['flags'])
         if 'parallel' in event:
             CONFIG.PARALLELIZE = event['parallel']
         CONFIG.set_logger(DIR_SUFFIX + f"log_{bioproject_info['name']}_job{lam_id}.txt")
@@ -105,6 +122,9 @@ def dynamoDB_store(status_code, message, time_duration, alias_size, process_id, 
     table.put_item(Item=item)
     CONFIG.log_print(f"Stored in dynamoDB: {item}", 1)
 
+    if CONFIG.IGNORE_DYNAMO:
+        CONFIG.log_print(f"Flag set to Ignoring dynamoDB, so we don't check the dynamoDB message count.", 1)
+        return item
     # scan the table to see if this was the last lambda to finish
     dynamodb_client = boto3.client('dynamodb')
     response = dynamodb_client.query(

@@ -77,7 +77,8 @@ def update_progress(status, num_bioprojects, num_lambda_jobs, num_permutation_te
             'num_permutation_tests': str(num_permutation_tests),
             'num_jobs_completed': str(num_jobs_completed),
             'time_elapsed': str(time.time() - start_time),
-            'start_time': str(start_time)
+            'start_time': str(start_time),
+            'preprocessing_time': str(time.time() - start_time)
         }, f)
     if sync_s3:
         s3_sync()
@@ -231,12 +232,51 @@ def preprocessing(data_file: pd.DataFrame, start_time: float) -> tuple[int, int,
 
     # graph this to see lambda job count distribution: sorted([bioprojects_dict[x].num_lambda_jobs for x in bioprojects_dict])
 
-    LAMBDA_CLIENT = boto3.client('lambda')
     mwas_id = str(uuid.uuid4())
     # DISPATCH ALL LAMBDA JOBS
+    # LAMBDA_CLIENT = boto3.client('lambda')
+    # job_list = []
+    # flags = CONFIG.to_json()
+    # for bioproject in bioprojects_dict:
+    #     bioproject_obj = bioprojects_dict[bioproject]
+    #     bioproject_obj.get_jobs(job_list)
+    # # event limit is 256KB, one job message is about 390bytes, round to 400. then add 500 to account for other data
+    # # so we'll do it in batches of 600 (which is roughly min(1200, (1024 * 256 - 500) / 400))
+    # batch_size, left_off = 600, 0
+    # job_is_done = False
+    # while not job_is_done:
+    #     for i in range(left_off, len(job_list), batch_size):
+    #         if len(job_list) - i < batch_size:
+    #             job_slice = job_list[i:]
+    #             CONFIG.log_print(f"Dispatching jobs {i} to {len(job_list)}")
+    #         else:
+    #             job_slice = job_list[i:i + batch_size]
+    #             CONFIG.log_print(f"Dispatching jobs {i} to {i + batch_size}")
+    #         payload = {
+    #             'jobs': job_slice,
+    #             'mwas_id': mwas_id,
+    #             'flags': flags,
+    #             'link': HASH_LINK,
+    #             'expected_jobs': total_lambda_jobs
+    #         }
+    #         try:
+    #             LAMBDA_CLIENT.invoke(
+    #                 FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas_pre_helper',
+    #                 InvocationType='Event',  # Asynchronous invocation
+    #                 Payload=json.dumps(payload)
+    #             )
+    #         except Exception as e:
+    #             CONFIG.log_print(f"Error in invoking lambda: {e}", 0)
+    #             left_off = i
+    #             batch_size = max(10, batch_size // 2)
+    #             break
+    #     job_is_done = True
+
+    SNS_CLIENT = boto3.client('sns')
+    flags = CONFIG.to_json()
     for bioproject in bioprojects_dict:
         bioproject_obj = bioprojects_dict[bioproject]
-        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, HASH_LINK, LAMBDA_CLIENT, total_lambda_jobs)
+        bioproject_obj.dispatch_all_lambda_jobs(mwas_id, HASH_LINK, SNS_CLIENT, total_lambda_jobs, flags, direct=False)
         del bioproject_obj
 
     return num_bioprojects, total_lambda_jobs, total_perm_tests
@@ -277,8 +317,8 @@ def main(flags: dict):
 
         # create the problematic bioprojects file and logger and progress.json
         CONFIG.set_logger(preproc_log_file_actual)
-        CONFIG.set_log_level(0 if '--no-logging' in flags else (1 if '--suppress-logging' in flags else 2),
-                             False if '--print-mode' in flags else True)
+        CONFIG.set_log_level(0 if 'no_logging' in flags else (1 if 'suppress_logging' in flags else 2),
+                             False if 'print_mode' in flags else True)
         with open(problematic_biopjs_file_actual, 'w') as f:
             f.write('bioproject,reason\n')
         update_progress('Starting', 0, 0, 0, 0, time_start, False)
@@ -290,22 +330,23 @@ def main(flags: dict):
         return 1, 'could not set s3 output directory'
 
     # set flags
-
-    if '--already-normalized' in flags:  # TODO: test
-        CONFIG.ALREADY_NORMALIZED = flags['--already-normalized']
-    if '--p-value-threshold' in flags:
+    if 'ignore_dynamo' in flags:
+        CONFIG.IGNORE_DYNAMO = 1
+    if 'already_normalized' in flags:  # TODO: test
+        CONFIG.ALREADY_NORMALIZED = flags['already_normalized']
+    if 'p_value_threshold' in flags:
         try:
-            CONFIG.P_VALUE_THRESHOLD = float(flags['--p-value-threshold'])
+            CONFIG.P_VALUE_THRESHOLD = float(flags['p_value_threshold'])
         except Exception as e:
             CONFIG.log_print(f"Error in setting p-value threshold: {e}", 0)
             return 1
-    if '--group-nonzero-threshold' in flags:
+    if 'group_nonzero_threshold' in flags:
         try:
-            CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(flags['--group-nonzero-threshold'])
+            CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = int(flags['group_nonzero_threshold'])
         except Exception as e:
             CONFIG.log_print(f"Error in setting group nonzeros threshold: {e}", 0)
             return 1
-    if '--explicit-zeros' in flags or '--explicit-zeroes' in flags:
+    if 'explicit_zeros' in flags or 'explicit_zeroes' in flags:
         CONFIG.IMPLICIT_ZEROS = 0
         if CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD < 4:
             CONFIG.GROUP_NONZEROS_ACCEPTANCE_THRESHOLD = 4
@@ -355,6 +396,7 @@ def lambda_handler(event, context):
     """Main function to run MWAS on the given data file.
     should have flags dict and hash"""
     print(context)
+    print(event)
 
     try:
         if 'body' not in event:
