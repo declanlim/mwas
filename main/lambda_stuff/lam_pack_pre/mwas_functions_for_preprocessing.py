@@ -41,13 +41,23 @@ BLACKLIST_2 = {"PRJNA614995", "PRJNA704697", "PRJNA738870", "PRJNA731149", "PRJN
                "PRJEB3084", "PRJNA743046", "PRJNA689853", "PRJNA186035", "PRJNA315192"
                }
 BLACKLIST = BLACKLIST.union(BLACKLIST_2)
-BLACKLISTED_METADATA_FIELDS = {
+BLACKLISTED_METADATA_FIELDS_1 = {
     'publication_date', 'center_name', 'first_public', 'last_public', 'last_update', 'INSDC center name', 'INSDC first public',
     'INSDC last public', 'INSDC last update', 'ENA center name', 'ENA first public', 'ENA last public', 'ENA last update',
     'ENA-FIRST-PUBLIC', 'ENA-LAST-UPDATE', 'DDBJ center name', 'DDBJ first public', 'DDBJ last public', 'DDBJ last update',
     'Contacts/Contact/Name/First', 'Contacts/Contact/Name/Middle', 'Contacts/Contact/Name/Last', 'Contacts/Contact/@email',
     'Name/@url', 'name/@url', 'collected_by', 'when', 'submission_date'
 }
+BLACKLISTED_METADATA_FIELDS_2 = {
+    "anonymized name", "biomaterial_provider", "cell_type", "closest_city", "closest_locality", "collection time", "collection_date",
+    "collection_timestamp", "collector", "date collected", "date received", "ena first public", "ena last update", "ena-checklist",
+    "ena-first-public", "ena-last-update", "env_broad_scale", "env_local_scale", "env_medium", "event date/time", "event date/time end",
+    "event date/time start", "geo_loc_name", "geographic location (depth)", "geographic location (latitude)", "geographic location (region and locality)",
+    "insdc center name", "insdc first public", "insdc last update", "last_update", "lat_lon", "latitude", "latitude end", "latitude start",
+    "longitude", "longitude end", "longitude start", "name", "name/#text", "package", "pangaea event label", "pangaea sample label",
+    "paragraph", "publication_date", "serovar", "specimen collection date", "title"
+}
+BLACKLISTED_METADATA_FIELDS = BLACKLISTED_METADATA_FIELDS_1.union(BLACKLISTED_METADATA_FIELDS_2)
 
 # constants
 NORMALIZING_CONST = 1000000  # 1 million
@@ -61,6 +71,7 @@ OUT_COLS = [
     'bioproject', 'group', 'metadata_field', 'metadata_value', 'test', 'num_true', 'num_false', 'mean_rpm_true', 'mean_rpm_false',
     'sd_rpm_true', 'sd_rpm_false', 'fold_change', 'test_statistic', 'p_value', 'true_biosamples', 'false_biosamples', 'test_time_duration'
 ]
+size_names = {900: "_small", 3600: "", 5400: "", 7200: "_large", 10240: "_large"}
 
 logging.basicConfig(level=logging.INFO)
 
@@ -81,6 +92,7 @@ class Config:
     FILE_LOCK = Lock()
     OUT_FILE = None
     TIME_LIMIT = 60
+    IGNORE_DYNAMO = 0
 
     def to_json(self) -> dict:
         """Convert the configuration settings to a dictionary
@@ -93,7 +105,8 @@ class Config:
             'INCLUDE_SKIPPED_GROUP_STATS': str(self.INCLUDE_SKIPPED_GROUP_STATS),
             'TEST_BLACKLISTED_METADATA_FIELDS': str(self.TEST_BLACKLISTED_METADATA_FIELDS),
             'LOGGING_LEVEL': str(self.LOGGING_LEVEL),
-            'USE_LOGGER': str(self.USE_LOGGER)
+            'USE_LOGGER': str(self.USE_LOGGER),
+            'IGNORE_DYNAMO': str(self.IGNORE_DYNAMO)
         }
 
     def load_from_json(self, config_dict: dict) -> None:
@@ -108,6 +121,8 @@ class Config:
         self.USE_LOGGER = int(config_dict['USE_LOGGER'])
         if 'TIME_LIMIT' in config_dict:
             self.TIME_LIMIT = float(config_dict['TIME_LIMIT'])
+        if 'IGNORE_DYNAMO' in config_dict:
+            self.IGNORE_DYNAMO = int(config_dict['IGNORE_DYNAMO'])
 
     def log_print(self, msg: Any, lvl: int = 1) -> None:
         """Print a message if the logging level is appropriate"""
@@ -255,50 +270,117 @@ class BioProjectInfo:
         assert self.num_lambda_jobs == len(self.jobs)
         return self.n_actual_permutation_sets, self.num_lambda_jobs
 
-    def dispatch_all_lambda_jobs(self, mwas_id: str, link: str, lam_client: boto3.client, expected_jobs) -> None:
+    def dispatch_lambda(self, mwas_id: str, link: str, client: boto3.client, expected_jobs, bioproject_info, flags, job_window, lid, func, direct=False) -> None:
+        """only used by dispatch_all_lambda_jobs, which is currently not in use
+
+        note, this function doesn't even work properly for sns mode (direct=False) due to JSON parsing bugs....
+        also, direct mode isn't testing in this new format (but it was the method used by mwas until I introduced get_jobs)"""
+        message_data = {
+            'mwas_id': mwas_id,
+            'bioproject_info': bioproject_info,
+            'link': link,
+            'job_window': job_window,  # empty implies all groups
+            'id': lid,  # 0 implies this is the non-perm tests lambda
+            'flags': flags,
+            'expected_jobs': expected_jobs
+        }
+        if not direct:
+            message_data['func'] = func
+        message = json.dumps(message_data)
+        if direct:  # send directly to lambda using a lambda client
+            client.invoke(
+                FunctionName=func,
+                InvocationType='Event',  # Asynchronous invocation
+                Payload=message
+            )
+        else:  # send to sns topic using an sns client
+            self.config.log_print(f"{message}")
+            client.publish(
+                TopicArn='arn:aws:sns:us-east-1:797308887321:mwas_sns',
+                Message=message,
+                Subject=f"Dispatching lambda job for {mwas_id}",
+                MessageAttributes={
+                    'status': {
+                        'DataType': 'String',
+                        'StringValue': 'Dispatching lambda job'
+                    },
+                    'mwas_id': {
+                        'DataType': 'String',
+                        'StringValue': mwas_id
+                    },
+                    'bioproject_info': {
+                        'DataType': 'String',
+                        'StringValue': bioproject_info
+                    },
+                    'link': {
+                        'DataType': 'String',
+                        'StringValue': link
+                    },
+                    'job_window': {
+                        'DataType': 'String',
+                        'StringValue': job_window
+                    },
+                    'id': {
+                        'DataType': 'Number',
+                        'StringValue': lid
+                    },
+                    'flags': {
+                        'DataType': 'String',
+                        'StringValue': flags
+                    },
+                    'expected_jobs': {
+                        'DataType': 'Number',
+                        'StringValue': expected_jobs
+                    },
+                    'func': {
+                        'DataType': 'String',
+                        'StringValue': func
+                    }
+                })
+
+    def dispatch_all_lambda_jobs(self, mwas_id: str, link: str, client: boto3.client, expected_jobs, flags, direct=False) -> None:
         """lam_client: lambda_client = boto3.client('lambda')
 
         note lambda handler will call self.process_bioproject(...)
         """
         bioproject_info = self.to_json()
-        flags = self.config.to_json()
 
         self.config.log_print(f"dispatching all {self.num_lambda_jobs} lambda jobs for {self.name}")
         # non permutation test lambda(TODO: lambda[s]?)  always uses the 4 core 5400MB ram lambda
-        lam_client.invoke(
-            FunctionName='arn:aws:lambda:us-east-1:797308887321:function:mwas',
-            InvocationType='Event',  # Asynchronous invocation
-            Payload=json.dumps({
-                'mwas_id': mwas_id,
-                'bioproject_info': bioproject_info,
-                'link': link,
-                'job_window': 'full',  # empty implies all groups
-                'id': 0,  # 0 implies this is the non-perm tests lambda
-                'flags': flags,
-                'expected_jobs': expected_jobs
-            })
-        )
+        self.dispatch_lambda(mwas_id, link, client, str(expected_jobs), str(bioproject_info), str(flags),
+                             'full', str(0), 'arn:aws:lambda:us-east-1:797308887321:function:mwas', direct=direct)
 
         # pick the next lambda size to fit our size
         lambda_alias = f"{self.lambda_size}MBram"
+        self.config.log_print(lambda_alias)
+
         for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
             self.config.log_print(f"dispatching lambda job {i + 1} for {self.name}")
             # Invoke the Lambda function
-            size_names = {900: "_small", 3600: "", 5400: "", 7200: "_large", 10240: "_large"}
+            formatted_job = str(job)
             extra = size_names[self.lambda_size]
-            lam_client.invoke(
-                FunctionName=f'arn:aws:lambda:us-east-1:797308887321:function:mwas{extra}',
-                InvocationType='Event',  # Asynchronous invocation
-                Payload=json.dumps({
-                    'mwas_id': mwas_id,
-                    'bioproject_info': bioproject_info,
-                    'link': link,
-                    'job_window': job,
-                    'id': str(i + 1),
-                    'flags': flags,
-                    'expected_jobs': expected_jobs
-                })
-            )
+            self.dispatch_lambda(mwas_id, link, client, str(expected_jobs), str(bioproject_info), str(flags), formatted_job, str(i + 1),
+                                 f'arn:aws:lambda:us-east-1:797308887321:function:mwas{extra}', direct=direct)
+
+    def get_jobs(self, job_list):
+        """Get the jobs for this bioproject
+
+        mutates job list to save append overhead"""
+        bioproject_info = self.to_json()
+        job_list.append({
+            'bioproject_info': bioproject_info,
+            'job_window': 'full',  # empty implies all groups
+            'id': str(0),  # 0 implies this is the non-perm tests lambda
+            'func': 'mwas'
+        })
+        for i, job in enumerate(self.jobs):  # could be just ['full'] in many cases
+            extra = size_names[self.lambda_size]
+            job_list.append({
+                'bioproject_info': bioproject_info,
+                'job_window': job,  # empty implies all groups
+                'id': str(i + 1),
+                'func': f'mwas{extra}'
+            })
 
 
 def load_bioproject_from_dict(config: Config, bioproject_dict: dict) -> BioProjectInfo:

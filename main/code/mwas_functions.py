@@ -47,13 +47,23 @@ BLACKLIST_2 = {"PRJNA614995", "PRJNA704697", "PRJNA738870", "PRJNA731149", "PRJN
                "PRJEB3084", "PRJNA743046", "PRJNA689853", "PRJNA186035", "PRJNA315192"
                }
 BLACKLIST = BLACKLIST.union(BLACKLIST_2)
-BLACKLISTED_METADATA_FIELDS = {
+BLACKLISTED_METADATA_FIELDS_1 = {
     'publication_date', 'center_name', 'first_public', 'last_public', 'last_update', 'INSDC center name', 'INSDC first public',
     'INSDC last public', 'INSDC last update', 'ENA center name', 'ENA first public', 'ENA last public', 'ENA last update',
     'ENA-FIRST-PUBLIC', 'ENA-LAST-UPDATE', 'DDBJ center name', 'DDBJ first public', 'DDBJ last public', 'DDBJ last update',
     'Contacts/Contact/Name/First', 'Contacts/Contact/Name/Middle', 'Contacts/Contact/Name/Last', 'Contacts/Contact/@email',
     'Name/@url', 'name/@url', 'collected_by', 'when', 'submission_date'
 }
+BLACKLISTED_METADATA_FIELDS_2 = {
+    "anonymized name", "biomaterial_provider", "cell_type", "closest_city", "closest_locality", "collection time", "collection_date",
+    "collection_timestamp", "collector", "date collected", "date received", "ena first public", "ena last update", "ena-checklist",
+    "ena-first-public", "ena-last-update", "env_broad_scale", "env_local_scale", "env_medium", "event date/time", "event date/time end",
+    "event date/time start", "geo_loc_name", "geographic location (depth)", "geographic location (latitude)", "geographic location (region and locality)",
+    "insdc center name", "insdc first public", "insdc last update", "last_update", "lat_lon", "latitude", "latitude end", "latitude start",
+    "longitude", "longitude end", "longitude start", "name", "name/#text", "package", "pangaea event label", "pangaea sample label",
+    "paragraph", "publication_date", "serovar", "specimen collection date", "title"
+}
+BLACKLISTED_METADATA_FIELDS = BLACKLISTED_METADATA_FIELDS_1.union(BLACKLISTED_METADATA_FIELDS_2)
 
 # constants
 NORMALIZING_CONST = 1000000  # 1 million
@@ -87,6 +97,7 @@ class Config:
     FILE_LOCK = Lock()
     OUT_FILE = None
     TIME_LIMIT = 60
+    IGNORE_DYNAMO = 0
 
     def to_json(self) -> dict:
         """Convert the configuration settings to a dictionary
@@ -99,7 +110,8 @@ class Config:
             'INCLUDE_SKIPPED_GROUP_STATS': str(self.INCLUDE_SKIPPED_GROUP_STATS),
             'TEST_BLACKLISTED_METADATA_FIELDS': str(self.TEST_BLACKLISTED_METADATA_FIELDS),
             'LOGGING_LEVEL': str(self.LOGGING_LEVEL),
-            'USE_LOGGER': str(self.USE_LOGGER)
+            'USE_LOGGER': str(self.USE_LOGGER),
+            'IGNORE_DYNAMO': str(self.IGNORE_DYNAMO)
         }
 
     def load_from_json(self, config_dict: dict) -> None:
@@ -114,6 +126,8 @@ class Config:
         self.USE_LOGGER = int(config_dict['USE_LOGGER'])
         if 'TIME_LIMIT' in config_dict:
             self.TIME_LIMIT = float(config_dict['TIME_LIMIT'])
+        if 'IGNORE_DYNAMO' in config_dict:
+            self.IGNORE_DYNAMO = int(config_dict['IGNORE_DYNAMO'])
 
     def log_print(self, msg: Any, lvl: int = 1) -> None:
         """Print a message if the logging level is appropriate"""

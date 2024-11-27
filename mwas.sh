@@ -238,7 +238,7 @@ EOF
     exit 0
 elif [[ $1 == "-ca" || $1 == "--clean-all" ]]; then
     # remove all downloaded files and directories
-    rm -rf mwas_results_folder_*
+    rm -rf mwas_run_folder_*
     echo "All downloaded files and directories have been removed."
     exit 0
 elif [[ $1 == "-r" || $1 == "--run" ]]; then
@@ -251,6 +251,11 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     if ! command -v jq &> /dev/null; then
         echo "Error: jq is not installed"
         echo "Please install jq by running 'sudo apt install jq'"
+        exit 1
+    fi
+    if ! command -v sha256sum &> /dev/null; then
+        echo "Error: sha256sum is not installed"
+        echo "Please install sha256sum by running 'sudo apt install sha256sum'"
         exit 1
     fi
 
@@ -301,6 +306,9 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
             ;;
           --no-logging)
             JSON_DATA="$JSON_DATA\"no_logging\": 1,"
+            ;;
+          --ignore-dynamo)
+            JSON_DATA="$JSON_DATA\"ignore_dynamo\": 1,"
             ;;
           --already-normalized)
             JSON_DATA="$JSON_DATA\"already_normalized\": 1,"
@@ -375,7 +383,7 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
     fi
 
     # set up directory to store results
-    results_dir="$RESULTS_DIR$hash"
+    results_dir="mwas_run_folder_$hash"
     if [[ ! -d $results_dir ]]; then
         mkdir $results_dir
     fi
@@ -402,110 +410,37 @@ elif [[ $1 == "-r" || $1 == "--run" ]]; then
         echo "ERROR: $ERROR"
         exit 1
     fi
-fi
-#
-#    # send request to server to run MWAS (how to catch response?
-#    response=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_DATA" $SERVER_URL)
-#
-#    # read response message and if it says with exit code 0, tell user's MWAS finished successfully otherwise, say there was an issue processing the input
-#    message=$(echo $response | jq -r '.message')
-#    status=$(echo $response | jq -r '.status')
-#    error=$(echo $response | jq -r '.error')
-#
-#    # check if the response contains an error message
-#    if [[ $error != "null" ]]; then
-#        echo "Error: $error"
-#        exit 1
-#    else
-#        echo "$message"
-#        echo "$status"
-#    fi
-#elif [[ $1 == "-g" || $1 == "--get" ]]; then
-#    # check if session code is provided
-#    if [[ $# -lt 2 ]]; then
-#        echo "Error: session code not provided"
-#        exit 1
-#    fi
-#
-#    # get session code
-#    SESSION_CODE=$2
-#
-#    #  directory to store results
-#    results_dir="$RESULTS_DIR$SESSION_CODE"
-#    if [[ ! -d $results_dir ]]; then
-#        mkdir $results_dir
-#    fi
-#    cd $results_dir
-#
-#    # check if session code exists via progress report since that is always available if running
-#    report=$(curl -s -o progress_report.json $CURL_SRC$SESSION_CODE/progress_report.json)
-#    DNE=$(cat progress_report.json | grep "The specified key does not exist" | wc -l)
-#    if [[ $DNE -eq 1 ]]; then
-#        echo "Error: session code does not exist"
-#        rm progress_report.json
-#        cd ..
-#        rmdir $results_dir
-#        exit 1
-#    fi
-#
-#    if [[ $3 == "-p" || $3 == "--progress" || $3 == "-vp" || $3 == "--verbose-progress" ]]; then
-#        # progress
-#        report=$(jq '.' progress_report.json)
-#        printf '=%.0s' $(seq 1 $(tput cols))
-#        echo "MWAS PROGRESS REPORT:"
-#        echo "Status: $(echo $report | jq -r '.status' 2>/dev/null)"
-#        echo "elapsed time: $(echo $report | jq -r '.time_elapsed' 2>/dev/null)"
-#        if [[ $3 == "-vp" || $3 == "--verbose-progress" ]]; then
-#            # verbose progress
-#            echo "Start time: $(echo $report | jq -r '.start_time' 2>/dev/null)"
-#            echo "Number of aws lambdas: $(echo $report | jq -r '.num_lambdas_jobs' 2>/dev/null)"
-#            echo "Number of aws lambdas completed: $(echo $report | jq -r '.num_jobs_completed' 2>/dev/null)"
-#            echo "Number of permutation tests: $(echo $report | jq -r '.num_permutation_tests' 2>/dev/null)"
-#            echo "total cost: $(echo $report | jq -r '.total_cost' 2>/dev/null)"
-#            successes=$(echo $report | jq -r '.successes' 2>/dev/null)
-#            fails=$(echo $report | jq -r '.fails' 2>/dev/null)
-#            rate=$(echo "scale=2; $successes / ($successes + $fails) * 100" | bc)
-#            echo "Success rate: ${rate}%"
-#
-#        fi
-#        printf '=%.0s' $(seq 1 $(tput cols))
-#    fi
-#
-#    if [[ $3 == "-l" || $3 == "--log" || $3 == "-a" || $3 == "--all" ]]; then
-#        # download log file
-#        curl -o mwas_log.txt -s $CURL_SRC$SESSION_CODE/mwas_logging.txt
-#        failed=$(cat mwas_log.txt | grep "The specified key does not exist" | wc -l)
-#        if [[ $failed -eq 1 ]]; then
-#            echo "Error: There was no log file."
-#        else
-#            echo "Log file downloaded."
-#        fi
-#    fi
-#    if [[ $3 == "-ib" || $3 == "--ignored-biopjs" || $3 == "-a" || $3 == "--all" ]]; then
-#        # download ignored bioprojects file
-#        curl -o ignored_bioprojects.txt -s $CURL_SRC$SESSION_CODE/problematic_biopjs.txt
-#        failed=$(cat ignored_bioprojects.txt | grep "The specified key does not exist" | wc -l)
-#        if [[ $failed -eq 1 ]]; then
-#            echo "Error: There was no ignored bioprojects list."
-#        else
-#            echo "Ignored_bioprojects list downloaded."
-#        fi
-#    fi
-#    if [[ $3 == "-o" || $3 == "--output" || $3 == "-a" || $3 == "--all" || $3 == "" ]]; then
-#        # check if it's already downloaded
-#        if [[ -f mwas_output.csv ]]; then
-#            echo "MWAS output was already downloaded."
-#        else
-#            # download output file
-#            curl -o mwas_output.csv -s $CURL_SRC$SESSION_CODE/mwas_output.csv
-#            # check if success
-#            failed=$(cat mwas_output.csv | grep "The specified key does not exist" | wc -l)
-#            if [[ $failed -eq 1 ]]; then
-#                echo "Error: MWAS is still running. Could not download results yet."
-#            else
-#                echo "MWAS output downloaded."
-#            fi
-#        fi
-#    fi
-#    cd ..
+elif [[ $1 == "-g" || $1 == "--get" ]]; then
+    if [[ $# -lt 2 ]]; then
+        echo "Error: session code not provided"
+        exit 1
+    fi
+    echo "checking progress for your MWAS run..."
+
+    # download progress.json from s3
+    SESSION_CODE=$2
+    curl -s -H "Host: ${S3_BUCKET}.s3.amazonaws.com" \
+         -H "Content-Type: application/json" \
+         https://${S3_BUCKET}.s3.amazonaws.com/${SESSION_CODE}/progress.json \
+         -o progress_file.json
+
+    # read progress.json
+    STATUS=$(jq -r '.status' progress_file.json)
+    if [[ $STATUS != "MWAS COMPLETED" ]]; then
+        echo "MWAS is still running. Current status: $STATUS"
+        rm progress_file.json
+        exit 0
+    fi
+    echo "MWAS has completed. Downloading results..."
+    # now download
+    curl -s -H "Host: ${S3_BUCKET}.s3.amazonaws.com" \
+         -H "Content-Type: application/json" \
+         https://${S3_BUCKET}.s3.amazonaws.com/${SESSION_CODE}/mwas_output.csv \
+         -o mwas_output_${SESSION_CODE}.csv
+    # delete progress file
+    rm progress_file.json
+    exit 0
+else
+    echo "Error: invalid flag. Run 'mwas -h' for help"
+    exit 1
 fi
