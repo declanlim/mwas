@@ -73,34 +73,15 @@ INPUT_FILE:   path to input file. Format: CSV, with 3 columns.
                 ERR2756786,Mitoviridae,4
 
 MODE:
-  -h, --help                display this help menu and exit
+  -h, --help                display this help menu
   -r, --run [INPUT_FILE] [MWAS_FLAGS]...
                             run MWAS with the specified input file, without
                             downloading anything afterwards. Provides a session
                             code relative to your input
-  -g, --get [SESSION_CODE] [OPTIONS]...
-                            download results from MWAS run, where [SESSION_CODE]
-                            is the code provided from running MWAS.
-                            [OPTIONS] specifies what to download. If no options
-                            are provided, it will default to the --output option.
-  -rg, --run-get [INPUT_FILE] [MWAS_FLAGS]...
-                            run MWAS with the specified input file, displays progress
-                            report, and downloads the results afterwards.
-                            Provides a session code relative to your input.
+  -g, --get [SESSION_CODE]  download results from MWAS run if MWAS has completed,
+                            where [SESSION_CODE] is the code from running MWAS.
+                            If MWAS has not finished running, it will notify you.
   -ca, --clean-all          Remove all downloaded files and directories
-
-OPTIONS: (used with -g, --get)
-  -o, --output              get the MWAS output results csv file
-                            (will not return anything if MWAS is still running)
-  -l, --log                 get the MWAS run logs
-                            (verbosity depends on the MWAS_FLAGS you set)
-  -ib, --ignored-biopjs     Download the list of ignored bioprojects
-  -p, --progress            Report progress of an MWAS run. Will report percentage
-                            of completion, elapsed_time and time_remaining
-  -vp, --verbose-progress   Report progress of an MWAS run in verbose mode
-                            (provides more detailed information than --progress)
-  -a, --all                 Download everything associated with the MWAS run
-                            (output, log, progress report, and ignored bioprojects)
 
 MWAS_FLAGS: (used with -r, --run)
   --suppress-logging        Suppress logging (default is verbose logging)
@@ -156,7 +137,7 @@ Example:
 
 MODE:
   -h, --help
-  display this help menu and exit
+  display this help menu
 
   -r, --run [INPUT_FILE] [MWAS_FLAGS]...
   run MWAS with the specified input file,
@@ -165,43 +146,13 @@ MODE:
   to your input
 
   -g, --get [SESSION_CODE] [OPTIONS]...
-  download results from MWAS run,
-  where [SESSION_CODE] is the code provided
-  from running MWAS. [OPTIONS] specifies what
-  to download. If no options are provided,
-  it will default to the --output option.
+  download results from MWAS run if MWAS
+  has completed, where [SESSION_CODE] is the
+  code from running MWAS. If MWAS has not
+  finished running, it will notify you.
 
   -ca, --clean-all
   Remove all downloaded files and directories
-
-OPTIONS: (used with -g, --get)
-  -o, --output
-  get the MWAS output results csv file
-  (will not return anything
-  if MWAS is still running)
-
-  -l, --log
-  get the MWAS run logs
-  (verbosity depends on the
-  MWAS_FLAGS you set)
-
-  -ib, --ignored-biopjs
-  Download the list of ignored bioprojects
-
-  -p, --progress
-  Report progress of an MWAS run.
-  Will report percentage of completion,
-  elapsed_time and time_remaining
-
-  -vp, --verbose-progress
-  Report progress of an MWAS run
-  in verbose mode (provides more detailed
-  information than --progress)
-
-  -a, --all
-  Download everything associated
-  with the MWAS run (output, log,
-  progress report, and ignored bioprojects)
 
 MWAS_FLAGS: (used with -r, --run)
   --suppress-logging

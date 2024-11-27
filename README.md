@@ -63,4 +63,8 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
 (TODO: Add a diagram of the visualization)
 
 # Installation
-(NOTE: shell script is currently outdated, so users cannot run MWAS)
+1. Download the shell script ```mwas.sh```
+2. Run ```./mwas.sh -h``` in your linux terminal to see the help menu
+3. Follow instructions in the help menu to run MWAS
+
+*note: for now, avoid running MWAS on massive datasets, as it might cause a bug that needs to be fixed.* 

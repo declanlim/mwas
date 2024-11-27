@@ -33,3 +33,6 @@ main/utilities/readable_condensed_bioproject_metadata_csvs/
 main/lambda_stuff/lam_pack/
 main/lambda_stuff/deppack*
 main/lambda_stuff/lam_pack_pre/
+MWAS*
+pg_1000.csv
+test_input.csv
