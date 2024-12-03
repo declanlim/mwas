@@ -5,35 +5,35 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
 
 # Notes:
 - Statistical tests in MWAS compare a set of 'true' biosamples (i.e. those that have a certain metadata field:value), to a set of 'false' biosamples (i.e. those that do not have that metadata field:value) 
-- The two sets are composed of rpm (read per million) values derived from the value provided by the user and then normalized via the spot count of the biosample. (users can specify if their data is already normalized)
+- The two sets are composed of rpm (read per million) values derived from the value provided by the user and then normalized to the spot count of the biosample. (users can specify if their data is already normalized)
 - The user should also provide "group" classifications to each biosample, and so MWAS will run tests on subsets of the user's data, where each subset is filtered by the group. 
 - The statistical tests are per-bioproject, so each test contains a collection of biosamples within a specific bioproject.
-- By default, the user data is assumed to have implicit zeros, that is, if a biosample is not provided for a group, it is assumed to have quantification of 0, so statistical tests will always incorporate every biosample in the bioproject.
-- The user can specify that their data is explicit zeros, in which case MWAS will ignore biosamples that are not provided for a group. This can may to ignoring metadata field:value tests, groups or even Bioprojects. Therefore, it's recommended to provide as much data as possible if using this mode.
-- T-tests are used when comparing one of the true sets has less than 4 biosamples
+- By default, the user data is assumed to have implicit zeros, that is, if a biosample is not provided for a group, it is assumed to have a quantification of 0, so statistical tests will always incorporate every biosample in the bioproject, by default.
+- The user can specify that their data uses explicit zeros so that MWAS will ignore biosamples not provided for a group. This may lead to ignoring metadata field:value tests, groups or even Bioprojects. Therefore, it's recommended that you provide as much data as possible if using this mode.
+- T-tests are used when comparing the set of 'true' biosamples or the set of 'false' biosamples has less than 4 biosamples
 - Otherwise, permutation tests are used. Note: permutation tests use up to 10,000 permutations to calculate p-values.
 - Certain metadata fields are ignored by default, e.g. publication_date, last_update, etc.
-- For every bioproject that contains a biosample in the user's input, MWAS will run N statistical tests, where N is the number of notable metadata field:value categories in the bioproject.
+- For each bioproject that contains a biosample in the user's input, MWAS will run N statistical tests, where N is the number of notable metadata field:value categories in the bioproject.
 - Notable metadata field:value categories satisfy these conditions:
     - The field has at least 2 unique values
     - The field can't be entirely composed of unique values
     - There are more than 3 biosamples in the bioproject.
-    - A field:value category may be the "not provided" category (it isn't ignored)
     - The number of biosamples in the field:value category is at least 2
+    - Although, note that a field:value category can be satisfactory even if the value is a "not provided" value
 - Certain bioprojects are ignored by default:
   - Bioprojects with less than 4 biosamples
   - Bioprojects with less than 2 notable metadata field:value categories
   - Bioprojects that are unavailable in the NCBI
   - Bioprojects that are blacklisted due to large size (there are less than 50 of these)
-  - Possibly, if MWAS's metadata database is outdated, bioprojects may be ignored
-  - If user data is explicit zeroes, then Bioprojects containing not enough non-zero values are ignored. Additionally, the same apllies to ignoring groups within a bioproject.
-- Test results consist of a p-value, fold-change, test-statistic, mean & standard deviation of both the true and false sets, and the number of biosamples in each set.
+  - Possibly, if MWAS's metadata database is outdated, bioprojects may be wrongly ignored as a side-effect. However, the metadata database should be updated monthly. 
+  - If user data uses explicit zeroes, then MWAS will ignore bioprojects with an insufficient number of non-zero values. Additionally, the same applies to ignoring groups within a bioproject.
+- Test results consist of a p-value, fold-change, test-statistic. It also contains, for both true and false sets, the mean, standard deviation, and the number of biosamples in each set.
   - The user can specify a p-value threshold to filter out insignificant results. Default is 0.005
   - Significant results will also report all the biosamples in the true and false sets, as long as there are under 200 biosamples to report
-  - Each test result corresponds to a metadata field:value category + group + bioproject combination. It intends to convey the correlation between the metadata field:value category and the group. The bioproject is just for reference (of which biosamples were used in the test)
+  - Each test result corresponds to a metadata field:value category + group + bioproject combination. It intends to convey the correlation between the metadata field:value category and the group. The bioproject is simply for reference (of which biosamples were used in the test)
   - The type of test used (t-test or permutation test) is also reported in the results
 - If you have a large amount of data (over 5 million runs), it is recommended to split the data into multiple files.
-  - Preferably, split by bioproject (this may be hard to tell, as we don't expect you to know the bioprojects), as opposed to splitting by groups. This way, it'll be much more efficient to run due to how MWAS batches jobs and parallelizes tests.
+  - Preferably, split by bioproject (this may be hard to tell, as we don't expect you to know the bioprojects), instead of splitting by groups. This way, it will be much more efficient to run MWAS, due to how MWAS batches jobs and parallelizes tests.
 
 
 # Input Format
@@ -67,4 +67,4 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
 2. Run ```./mwas.sh -h``` in your linux terminal to see the help menu
 3. Follow instructions in the help menu to run MWAS
 
-*note: for now, avoid running MWAS on massive datasets, as it might cause a bug that needs to be fixed.* 
+*note: for now, avoid running MWAS on massive datasets, as it might cause a bug-related problem that needs to be fixed.* 
