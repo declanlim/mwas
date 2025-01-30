@@ -1,5 +1,4 @@
 #  MWAS (Metadata Wide Association Study)
-(THIS README NEEDS TO BE UPDATED)
 
 MWAS is a tool that uses statistical analysis to find correlations between metadata sourced from NCBI BioSample database and quantifiable observations for each biosample provided by the user. 
 
@@ -57,14 +56,26 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
   - mwas_mdfile_info - Serratus database for metadata-file metadata (info about the metadata files)
 
 # Workflow
-(TODO: Add a diagram of the workflow)
+Workflow for one MWAS run: (standard serverless)
+![Note: this workflow diagram is outdated](./readme_imgs/workflow_mwas(old).jpg)
+(Note: this diagram is outdated, needs updating)
+
+Worflow for updating the metadata database:
+![Note: this workflow diagram is oversimplified](./readme_imgs/cond_conv_wf.png)
 
 # Statistical Test Visualization
-(TODO: Add a diagram of the visualization)
+The intuition for MWAS:
+![Note: this image is a gross oversimplification](./readme_imgs/proof_of_concept.png)
 
 # Installation
-1. Download the shell script ```mwas.sh```
-2. Run ```./mwas.sh -h``` in your linux terminal to see the help menu
-3. Follow instructions in the help menu to run MWAS
+<ol>
+  <li>Download the shell script <code>mwas.sh</code></li>
+  <li>Run <code>./mwas.sh -h</code> in your linux terminal to see the help menu.</li>
+  <li>
+    <p>You should see the following output: (it may look slightly different depending on your terminal width)</p>
+    <img src="./readme_imgs/shell_demo.png" alt="shell help menu" width="200"/>
+  </li>
+  <li>Follow instructions in the help menu to run MWAS</li>
+</ol>
 
 *note: for now, avoid running MWAS on massive datasets, as it might cause a bug-related problem that needs to be fixed.* 
