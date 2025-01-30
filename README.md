@@ -68,11 +68,14 @@ The intuition for MWAS:
 ![Note: this image is a gross oversimplification](./readme_imgs/proof_of_concept.png)
 
 # Installation
-1. Download the shell script ```mwas.sh```
-2. Run ```./mwas.sh -h``` in your linux terminal to see the help menu. 
-3. You should see the following output:
-<br></br>
-<img src="./readme_imgs/shell_demo.png" alt="shell help menu" width="200"/>
-6. Follow instructions in the help menu to run MWAS
+<ol>
+  <li>Download the shell script <code>mwas.sh</code></li>
+  <li>Run <code>./mwas.sh -h</code> in your linux terminal to see the help menu.</li>
+  <li>
+    <p>You should see the following output: (it may look slightly different depending on your terminal width)</p>
+    <img src="./readme_imgs/shell_demo.png" alt="shell help menu" width="200"/>
+  </li>
+  <li>Follow instructions in the help menu to run MWAS</li>
+</ol>
 
 *note: for now, avoid running MWAS on massive datasets, as it might cause a bug that needs to be fixed.* 
