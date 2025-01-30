@@ -60,7 +60,7 @@ Workflow for one MWAS run: (standard serverless)
 ![Note: this workflow diagram is outdated](./readme_imgs/workflow_mwas(old).jpg)
 (Note: this diagram is outdated, needs updating)
 
-Worflow for updating the metadata database:
+Workflow for updating the metadata database:
 ![Note: this workflow diagram is oversimplified](./readme_imgs/cond_conv_wf.png)
 
 # Statistical Test Visualization
