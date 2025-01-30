@@ -24,7 +24,7 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
   - Bioprojects with less than 2 notable metadata field:value categories
   - Bioprojects that are unavailable in the NCBI
   - Bioprojects that are blacklisted due to large size (there are less than 50 of these)
-  - Possibly, if MWAS's metadata database is outdated, bioprojects may be wrongly ignored as a side-effect. However, the metadata database should be updated monthly. 
+  - Possibly, if MWAS's metadata database is outdated, bioprojects may be wrongly ignored as a side effect. However, the metadata database should be updated monthly. 
   - If user data uses explicit zeroes, then MWAS will ignore bioprojects with an insufficient number of non-zero values. Additionally, the same applies to ignoring groups within a bioproject.
 - Test results consist of a p-value, fold-change, test-statistic. It also contains, for both true and false sets, the mean, standard deviation, and the number of biosamples in each set.
   - The user can specify a p-value threshold to filter out insignificant results. Default is 0.005
@@ -58,9 +58,9 @@ MWAS is a tool that uses statistical analysis to find correlations between metad
 # Workflow
 Workflow for one MWAS run: (standard serverless)
 ![Note: this workflow diagram is outdated](./readme_imgs/workflow_mwas(old).jpg)
-(Note: this diagram is outdated, needs updating)
+(Note: this diagram is outdated, and needs updating)
 
-Worflow for updating the metadata database:
+Workflow for updating the metadata database:
 ![Note: this workflow diagram is oversimplified](./readme_imgs/cond_conv_wf.png)
 
 # Statistical Test Visualization
@@ -70,7 +70,7 @@ The intuition for MWAS:
 # Installation
 <ol>
   <li>Download the shell script <code>mwas.sh</code></li>
-  <li>Run <code>./mwas.sh -h</code> in your linux terminal to see the help menu.</li>
+  <li>Run <code>./mwas.sh -h</code> in your Linux terminal to see the help menu.</li>
   <li>
     <p>You should see the following output: (it may look slightly different depending on your terminal width)</p>
     <img src="./readme_imgs/shell_demo.png" alt="shell help menu" width="200"/>
