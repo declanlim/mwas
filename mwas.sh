@@ -145,7 +145,7 @@ MODE:
   Provides a session code relative
   to your input
 
-  -g, --get [SESSION_CODE] [OPTIONS]...
+  -g, --get [SESSION_CODE]
   download results from MWAS run if MWAS
   has completed, where [SESSION_CODE] is the
   code from running MWAS. If MWAS has not
@@ -377,6 +377,24 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
 
     # read progress.json
     STATUS=$(jq -r '.status' progress_file.json)
+    if [[ $STATUS == "Processing" ]]; then
+        # check if diff. in current time with time on progress.json
+        START_TIME=$(jq -r '.start_time' progress_file.json)
+        PREPROCESSING_TIME=$(jq -r '.preprocessing_time' progress_file.json)
+        START_TIME=$(awk "BEGIN {print int($START_TIME)}")
+        PREPROCESSING_TIME=$(awk "BEGIN {print int($PREPROCESSING_TIME)}")
+        TIME=$((START_TIME + PREPROCESSING_TIME))
+
+        # since the preprocessing lambda will only update status to "Processing" after it's done, which implies all the job lambdas have been invoked.
+        TIME_SINCE_LAST_LAMBDA=$((`date +%s` - TIME))
+        echo "TIME SINCE PREPROCESSING COMPLETED: $TIME_SINCE_LAST_LAMBDA"
+        # so check if it's been more than 90 seconds since the last lambda was invoked, as that is max lifetime of a job lambdas
+        if [[ $TIME_SINCE_LAST_LAMBDA -gt 90 ]]; then
+            echo "Error: Something went wrong. Please contact the developer, and please provide the session code for this MWAS run"
+            rm progress_file.json
+            exit 1
+        fi
+    fi
     if [[ $STATUS != "MWAS COMPLETED" ]]; then
         echo "MWAS is still running. Current status: $STATUS"
         rm progress_file.json
@@ -390,6 +408,12 @@ elif [[ $1 == "-g" || $1 == "--get" ]]; then
          -o mwas_output_${SESSION_CODE}.csv
     # delete progress file
     rm progress_file.json
+
+    # try moving the file to the results directory if the results directory still exists
+    if [[ -d mwas_run_folder_${SESSION_CODE} ]]; then
+        mv mwas_output_${SESSION_CODE}.csv mwas_run_folder_${SESSION_CODE}
+    fi
+
     exit 0
 else
     echo "Error: invalid flag. Run 'mwas -h' for help"
